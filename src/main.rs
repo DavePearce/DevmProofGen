@@ -307,12 +307,12 @@ fn main() {
 		let opcode = 0x5f + bytes.len();
 		println!("\tst := {}(st,{});",OPCODES[opcode],bytes.to_hex_string());    
 	    }
-	    JUMPDEST(n) => print_jumpdest(pc),
+	    JUMPDEST(n) => print_jumpdest(pc, &disasm.get_state(pc)),
 	    JUMP => {
 		match disasm.get_state(pc).peek(0) {
 		    Value::Known(target) => {
 			println!("\tst := Jump(st);");
-			println!("\tblock_0x{:#08x}(st);", target);
+			println!("\tblock_{:#08x}(st);", target);
 		    }
 		    Value::Unknown => {
 			panic!("unable to resolve jump address");
@@ -323,9 +323,8 @@ fn main() {
 		match disasm.get_state(pc).peek(0) {
 		    Value::Known(target) => {
 			println!("\tvar tmp{} := st.Peek(1);",pc);
-			println!("\tst := Jumpi(st);");
-			println!("\tblock_0x{:#08x}(st);", target);
-			println!("\tif tmp{} != 0 {{ block_0x{:#08x}(st); return; }}",pc,target);			
+			println!("\tst := JumpI(st);");
+			println!("\tif tmp{} != 0 {{ block_{:#08x}(st); return; }}",pc,target);			
 		    }
 		    Value::Unknown => {
 			panic!("unable to resolve jump address");
@@ -348,17 +347,14 @@ fn main() {
     println!("}}");
 }
 
-fn print_jumpdest(pc: usize) {
+fn print_jumpdest(pc: usize, st: &CfaState) {
+    let stack_height = st.len();
     println!("}}");
     println!();
-    println!("method block_0x{:#08x}(st': State)",pc);
-    println!("requires st'.OK? && st'.PC() == 0x{:#08x}",pc);
+    println!("method block_{:#08x}(st': State)",pc);
+    println!("requires st'.OK? && st'.PC() == {:#08x}",pc);
     println!("requires st'.evm.code == Code.Create(BYTECODE)");
     println!("requires st'.WritesPermitted()");
-    println!("requires st'.Operands() >= 0 && st'.Capacity() > 0 {{");
+    println!("requires st'.Operands() == {} && st'.Capacity() > 0 {{",stack_height);
     println!("\tvar st := JumpDest(st');");    
-}
-
-fn print_jump(target: usize) {
-    
 }
