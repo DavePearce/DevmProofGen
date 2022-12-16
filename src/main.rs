@@ -262,7 +262,7 @@ pub static OPCODES : &'static [&'static str] = &[
     "SelfDestruct", //     0xff
 ];
 
-fn print_preamble() {
+fn print_preamble(bytes: &[u8]) {
     println!("include \"evm-dafny/src/dafny/evm.dfy\"");
     println!("include \"evm-dafny/src/dafny/evms/berlin.dfy\"");
     println!("import opened Int");
@@ -272,7 +272,12 @@ fn print_preamble() {
     println!("import opened EvmBerlin");
     println!("import opened EvmState");
     println!();
-    println!("const BYTECODE : seq<u8> := [];");
+    print!("const BYTECODE : seq<u8> := [");
+    for i in 0..bytes.len() {
+	print!("{:#02x}",bytes[i]);
+	if (i+1) != bytes.len() { print!(", "); }
+    }
+    println!("];");
     println!();
     println!("method main(context: Context.T, world: map<u160,WorldState.Account>, gas: nat)");
     println!("requires context.writePermission");
@@ -299,7 +304,7 @@ fn main() {
     let instructions = disasm.to_vec();
     let mut pc = 0;
     //
-    print_preamble();
+    print_preamble(&bytes);
     //
     for insn in &instructions {
         match insn {
@@ -323,8 +328,12 @@ fn main() {
 		match disasm.get_state(pc).peek(0) {
 		    Value::Known(target) => {
 			println!("\tvar tmp{} := st.Peek(1);",pc);
+			// NOTE: following seems necessary in some cases.
+			println!("\tassume st.IsJumpDest({:#08x});",target);
 			println!("\tst := JumpI(st);");
-			println!("\tif tmp{} != 0 {{ block_{:#08x}(st); return; }}",pc,target);			
+			println!("\tif tmp{} != 0 {{ block_{:#08x}(st); return; }}",pc,target);
+			println!("\tblock_{:#08x}(st);", pc+1);
+			print_jumpi(pc+1,&disasm.get_state(pc+1));
 		    }
 		    Value::Unknown => {
 			panic!("unable to resolve jump address");
@@ -345,6 +354,18 @@ fn main() {
     }
     //
     println!("}}");
+}
+
+fn print_jumpi(pc: usize, st: &CfaState) {
+    let stack_height = st.len();
+    println!("}}");
+    println!();
+    println!("method block_{:#08x}(st': State)",pc);
+    println!("requires st'.OK? && st'.PC() == {:#08x}",pc);
+    println!("requires st'.evm.code == Code.Create(BYTECODE)");
+    println!("requires st'.WritesPermitted()");
+    println!("requires st'.Operands() == {} {{",stack_height);
+    println!("\tvar st := st';");    
 }
 
 fn print_jumpdest(pc: usize, st: &CfaState) {
