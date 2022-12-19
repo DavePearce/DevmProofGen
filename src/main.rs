@@ -382,29 +382,11 @@ fn print_block_break(pc: usize, disasm : &Disassembly<CfaState>, bytes: &[u8]) {
     let st = disasm.get_state(pc);
     // Determine stack height on entry
     let stack_height = disasm.get_state(pc).len();
-    let max_height = max_height(pc,blk.end,st,bytes);
     println!("}}");
     println!();
     println!("method block_{:#08x}(st': State)",pc);
     println!("requires st'.OK? && st'.PC() == {:#08x}",pc);
     println!("requires st'.evm.code == Code.Create(BYTECODE)");
     println!("requires st'.WritesPermitted()");
-    println!("requires st'.Operands() >= {} && st'.Capacity() >= {} {{",stack_height, max_height-stack_height);
-}
-
-fn max_height(mut pc: usize, end: usize, mut st: CfaState, bytes: &[u8]) -> usize {
-    let mut max = st.len();
-    //
-    while pc < end {
-        // Decode instruction at the current position
-        let insn = Instruction::decode(pc,bytes);
-        // Apply the transfer function!
-        st = st.transfer(&insn);
-        // Update max
-        max = cmp::max(st.len(),max);
-        // Next instruction
-        pc = pc + insn.length(&[]);        
-    }
-    //
-    max
+    println!("requires st'.Operands() == {} {{",stack_height);
 }
