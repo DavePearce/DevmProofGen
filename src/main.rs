@@ -1,6 +1,6 @@
-use std::env;
+use std::{cmp,env};
 use evmil::{Instruction,FromHexString,ToHexString,CfaState};
-use evmil::{Disassemble,Disassembly,Value};
+use evmil::{AbstractState,Disassemble,Disassembly,Value};
 use evmil::Instruction::*;
 
 pub static OPCODES : &'static [&'static str] = &[
@@ -323,7 +323,8 @@ fn main() {
                     // Add explicit fallthru
                     println!("\tblock_{:#08x}(st);",pc);                    
                 }
-                print_jumpdest(pc, &disasm.get_state(pc))
+                print_block_break(pc, &disasm, &bytes);
+                println!("\tvar st := JumpDest(st');");                        
             }
 	    JUMP => {
 		match disasm.get_state(pc).peek(0) {
@@ -346,7 +347,8 @@ fn main() {
 			println!("\tif tmp{} != 0 {{ block_{:#08x}(st); return; }}",pc,target);
 			if break_jumpis {
                             println!("\tblock_{:#08x}(st);", pc+1);
-                            print_jumpi(pc+1,&disasm.get_state(pc+1));
+                            print_block_break(pc, &disasm, &bytes);
+                            println!("\tvar st := st';");
                         }
 		    }
 		    Value::Unknown => {
@@ -367,30 +369,42 @@ fn main() {
 	pc = pc + insn.length(&[]);
         fallthru = insn.fallthru();
     }
+    // Print terminator (if necessary)
+    if fallthru {
+        println!("\tassert st.OK?;");
+    }    
     //
     println!("}}");
 }
 
-fn print_jumpi(pc: usize, st: &CfaState) {
-    let stack_height = st.len();
+fn print_block_break(pc: usize, disasm : &Disassembly<CfaState>, bytes: &[u8]) {
+    let blk = disasm.get_enclosing_block(pc);
+    let st = disasm.get_state(pc);
+    // Determine stack height on entry
+    let stack_height = disasm.get_state(pc).len();
+    let max_height = max_height(pc,blk.end,st,bytes);
     println!("}}");
     println!();
     println!("method block_{:#08x}(st': State)",pc);
     println!("requires st'.OK? && st'.PC() == {:#08x}",pc);
     println!("requires st'.evm.code == Code.Create(BYTECODE)");
     println!("requires st'.WritesPermitted()");
-    println!("requires st'.Operands() == {} {{",stack_height);
-    println!("\tvar st := st';");    
+    println!("requires st'.Operands() >= {} && st'.Capacity() >= {} {{",stack_height, max_height-stack_height);
 }
 
-fn print_jumpdest(pc: usize, st: &CfaState) {
-    let stack_height = st.len();
-    println!("}}");
-    println!();
-    println!("method block_{:#08x}(st': State)",pc);
-    println!("requires st'.OK? && st'.PC() == {:#08x}",pc);
-    println!("requires st'.evm.code == Code.Create(BYTECODE)");
-    println!("requires st'.WritesPermitted()");
-    println!("requires st'.Operands() == {} && st'.Capacity() > 0 {{",stack_height);
-    println!("\tvar st := JumpDest(st');");    
+fn max_height(mut pc: usize, end: usize, mut st: CfaState, bytes: &[u8]) -> usize {
+    let mut max = st.len();
+    //
+    while pc < end {
+        // Decode instruction at the current position
+        let insn = Instruction::decode(pc,bytes);
+        // Apply the transfer function!
+        st = st.transfer(&insn);
+        // Update max
+        max = cmp::max(st.len(),max);
+        // Next instruction
+        pc = pc + insn.length(&[]);        
+    }
+    //
+    max
 }
