@@ -293,6 +293,8 @@ fn to_dfy_name(insn: &Instruction) -> String {
     OPCODES[opcode as usize].to_string()
 }
 
+const break_jumpis : bool = false;
+
 // This is a hack script for now.
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -303,16 +305,26 @@ fn main() {
     // Convert into instruction stream
     let instructions = disasm.to_vec();
     let mut pc = 0;
+    let mut fallthru = true;
     //
     print_preamble(&bytes);
     //
     for insn in &instructions {
         match insn {
+            DATA(bytes) => {
+                println!("\t// {}", bytes.to_hex_string());
+            }
 	    PUSH(bytes) => {
 		let opcode = 0x5f + bytes.len();
 		println!("\tst := {}(st,{});",OPCODES[opcode],bytes.to_hex_string());    
 	    }
-	    JUMPDEST(n) => print_jumpdest(pc, &disasm.get_state(pc)),
+	    JUMPDEST(n) => {
+                if fallthru {
+                    // Add explicit fallthru
+                    println!("\tblock_{:#08x}(st);",pc);                    
+                }
+                print_jumpdest(pc, &disasm.get_state(pc))
+            }
 	    JUMP => {
 		match disasm.get_state(pc).peek(0) {
 		    Value::Known(target) => {
@@ -332,8 +344,10 @@ fn main() {
 			println!("\tassume st.IsJumpDest({:#08x});",target);
 			println!("\tst := JumpI(st);");
 			println!("\tif tmp{} != 0 {{ block_{:#08x}(st); return; }}",pc,target);
-			println!("\tblock_{:#08x}(st);", pc+1);
-			print_jumpi(pc+1,&disasm.get_state(pc+1));
+			if break_jumpis {
+                            println!("\tblock_{:#08x}(st);", pc+1);
+                            print_jumpi(pc+1,&disasm.get_state(pc+1));
+                        }
 		    }
 		    Value::Unknown => {
 			panic!("unable to resolve jump address");
@@ -341,7 +355,7 @@ fn main() {
 		}
 	    }
 	    DUP(n) => {
-		println!("\tst := Dup(st,{});",n);        
+		println!("\tst := Dup(st,{});",n);
 	    }
 	    SWAP(n) => {
 		println!("\tst := Swap(st,{});",n);
@@ -351,6 +365,7 @@ fn main() {
 	    }
 	}
 	pc = pc + insn.length(&[]);
+        fallthru = insn.fallthru();
     }
     //
     println!("}}");
