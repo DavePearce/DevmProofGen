@@ -1,6 +1,7 @@
-use std::{cmp,env};
+use std::env;
 use evmil::{Instruction,FromHexString,ToHexString,CfaState};
-use evmil::{AbstractState,Disassemble,Disassembly,Value};
+use evmil::{AbstractState,Disassembly};
+use evmil::dfa::AbstractValue;
 use evmil::Instruction::*;
 
 pub static OPCODES : &'static [&'static str] = &[
@@ -279,6 +280,11 @@ fn print_preamble(bytes: &[u8]) {
     }
     println!("];");
     println!();
+    println!("type ValidState = st:State | st.OK? && st.WritesPermitted() && st.evm.code == Code.Create(BYTECODE)");
+    println!("witness OK(EVM(Context.Create(0,0,0,0,[],true,0,Context.Block.Info(0,0,0,0,0,0)),");
+    println!("           WorldState.Create(map[0:=WorldState.DefaultAccount()]),");
+    println!("           Stack.Create(),Memory.Create(),Code.Create(BYTECODE),SubState.Create(),0,0))");
+    println!();
     println!("method main(context: Context.T, world: map<u160,WorldState.Account>, gas: nat)");
     println!("requires context.writePermission");
     println!("requires gas > 100000");
@@ -293,7 +299,12 @@ fn to_dfy_name(insn: &Instruction) -> String {
     OPCODES[opcode as usize].to_string()
 }
 
-const break_jumpis : bool = false;
+/// Determine whether or not to split into true basic blocks, or into
+/// larger blocks.
+const BASIC_BLOCKS : bool = false;
+
+/// Determines whether overflow detection is enabled or not.
+const OVERFLOW_DETECTION : bool = true;
 
 // This is a hack script for now.
 fn main() {
@@ -301,7 +312,7 @@ fn main() {
     // Parse hex string into bytes
     let bytes = args[1].from_hex_string().unwrap();
     // Disassemble bytes into instructions
-    let mut disasm : Disassembly<CfaState> = Disassembly::new(&bytes).build();
+    let disasm : Disassembly<CfaState> = Disassembly::new(&bytes).build();
     // Convert into instruction stream
     let instructions = disasm.to_vec();
     let mut pc = 0;
@@ -318,40 +329,40 @@ fn main() {
 		let opcode = 0x5f + bytes.len();
 		println!("\tst := {}(st,{});",OPCODES[opcode],bytes.to_hex_string());    
 	    }
-	    JUMPDEST(n) => {
+	    JUMPDEST(_) => {
                 if fallthru {
                     // Add explicit fallthru
                     println!("\tblock_{:#08x}(st);",pc);                    
                 }
-                print_block_break(pc, &disasm, &bytes);
+                print_block_break(pc, &disasm);
                 println!("\tvar st := JumpDest(st');");                        
             }
 	    JUMP => {
 		match disasm.get_state(pc).peek(0) {
-		    Value::Known(target) => {
+		    AbstractValue::Known(target) => {
 			println!("\tst := Jump(st);");
 			println!("\tblock_{:#08x}(st);", target);
 		    }
-		    Value::Unknown => {
+		    AbstractValue::Unknown => {
 			panic!("unable to resolve jump address");
 		    }
 		}
 	    }
 	    JUMPI => {
 		match disasm.get_state(pc).peek(0) {
-		    Value::Known(target) => {
+		    AbstractValue::Known(target) => {
 			println!("\tvar tmp{} := st.Peek(1);",pc);
 			// NOTE: following seems necessary in some cases.
 			println!("\tassume st.IsJumpDest({:#08x});",target);
 			println!("\tst := JumpI(st);");
 			println!("\tif tmp{} != 0 {{ block_{:#08x}(st); return; }}",pc,target);
-			if break_jumpis {
+			if BASIC_BLOCKS {
                             println!("\tblock_{:#08x}(st);", pc+1);
-                            print_block_break(pc, &disasm, &bytes);
+                            print_block_break(pc, &disasm);
                             println!("\tvar st := st';");
                         }
 		    }
-		    Value::Unknown => {
+		    AbstractValue::Unknown => {
 			panic!("unable to resolve jump address");
 		    }
 		}
@@ -362,7 +373,25 @@ fn main() {
 	    SWAP(n) => {
 		println!("\tst := Swap(st,{});",n);
 	    }
-	    _ => {
+            ADD => {
+                if OVERFLOW_DETECTION {
+                    println!("\tassert (st.Peek(0) + st.Peek(1)) <= (MAX_U256 as u256);");
+                }
+                println!("\tst := Add(st);");
+            }
+            MUL => {
+                if OVERFLOW_DETECTION {
+                    println!("\tassert (st.Peek(0) * st.Peek(1)) <= (MAX_U256 as u256);");
+                }
+                println!("\tst := Mul(st);");
+            }
+            SUB => {
+                if OVERFLOW_DETECTION {
+                    println!("\tassert st.Peek(1) <= st.Peek(0);");
+                }
+                println!("\tst := Sub(st);");
+            }
+	    _ => {                
 		println!("\tst := {}(st);",to_dfy_name(&insn));
 	    }
 	}
@@ -377,16 +406,18 @@ fn main() {
     println!("}}");
 }
 
-fn print_block_break(pc: usize, disasm : &Disassembly<CfaState>, bytes: &[u8]) {
-    let blk = disasm.get_enclosing_block(pc);
+fn print_block_break(pc: usize, disasm : &Disassembly<CfaState>) {
     let st = disasm.get_state(pc);
-    // Determine stack height on entry
-    let stack_height = disasm.get_state(pc).len();
+    // Determine stack height on entry    
+    let stack_height = st.len();
+    //
     println!("}}");
     println!();
-    println!("method block_{:#08x}(st': State)",pc);
-    println!("requires st'.OK? && st'.PC() == {:#08x}",pc);
-    println!("requires st'.evm.code == Code.Create(BYTECODE)");
-    println!("requires st'.WritesPermitted()");
-    println!("requires st'.Operands() == {} {{",stack_height);
+    println!("method block_{:#08x}(st': ValidState)",pc);
+    println!("requires st'.PC() == {:#08x}",pc);
+    if stack_height.is_constant() {
+        println!("requires st'.Operands() == {} {{",stack_height.unwrap());
+    } else {
+        println!("requires st'.Operands() >= {} && st'.Operands() <= {} {{",stack_height.start,stack_height.end);
+    }
 }
