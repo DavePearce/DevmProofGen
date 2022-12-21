@@ -303,6 +303,9 @@ fn to_dfy_name(insn: &Instruction) -> String {
 /// larger blocks.
 const BASIC_BLOCKS : bool = false;
 
+/// Determines whether overflow detection is enabled or not.
+const OVERFLOW_DETECTION : bool = true;
+
 // This is a hack script for now.
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -370,7 +373,25 @@ fn main() {
 	    SWAP(n) => {
 		println!("\tst := Swap(st,{});",n);
 	    }
-	    _ => {
+            ADD => {
+                if OVERFLOW_DETECTION {
+                    println!("\tassert (st.Peek(0) + st.Peek(1)) <= (MAX_U256 as u256);");
+                }
+                println!("\tst := Add(st);");
+            }
+            MUL => {
+                if OVERFLOW_DETECTION {
+                    println!("\tassert (st.Peek(0) * st.Peek(1)) <= (MAX_U256 as u256);");
+                }
+                println!("\tst := Mul(st);");
+            }
+            SUB => {
+                if OVERFLOW_DETECTION {
+                    println!("\tassert st.Peek(1) <= st.Peek(0);");
+                }
+                println!("\tst := Sub(st);");
+            }
+	    _ => {                
 		println!("\tst := {}(st);",to_dfy_name(&insn));
 	    }
 	}
