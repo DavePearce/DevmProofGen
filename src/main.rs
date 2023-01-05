@@ -304,7 +304,7 @@ fn to_dfy_name(insn: &Instruction) -> String {
 const BASIC_BLOCKS : bool = false;
 
 /// Determines whether overflow detection is enabled or not.
-const OVERFLOW_DETECTION : bool = true;
+const OVERFLOW_DETECTION : bool = false;
 
 // This is a hack script for now.
 fn main() {
@@ -340,11 +340,14 @@ fn main() {
 	    JUMP => {
 		match disasm.get_state(pc).peek(0) {
 		    AbstractValue::Known(target) => {
+			// NOTE: following seems necessary in some cases.
+			println!("\tassume st.IsJumpDest({:#08x});",target);
 			println!("\tst := Jump(st);");
 			println!("\tblock_{:#08x}(st);", target);
 		    }
 		    AbstractValue::Unknown => {
-			panic!("unable to resolve jump address");
+                        println!("\t// Unable to resolve JUMP address!");
+                        println!("\tassert false;");
 		    }
 		}
 	    }
@@ -363,7 +366,8 @@ fn main() {
                         }
 		    }
 		    AbstractValue::Unknown => {
-			panic!("unable to resolve jump address");
+                        println!("\t// Unable to resolve JUMPI address!");
+                        println!("\tassert false;");                        
 		    }
 		}
 	    }
