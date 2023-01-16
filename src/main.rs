@@ -1,4 +1,5 @@
 use std::env;
+use clap::{arg, Arg, Command};
 use evmil::{Instruction,FromHexString,ToHexString,CfaState};
 use evmil::{AbstractState,Disassembly};
 use evmil::dfa::AbstractValue;
@@ -303,14 +304,7 @@ fn to_dfy_name(insn: &Instruction) -> String {
 /// larger blocks.
 const BASIC_BLOCKS : bool = false;
 
-/// Determines whether overflow detection is enabled or not.
-const OVERFLOW_DETECTION : bool = false;
-
-// This is a hack script for now.
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    // Parse hex string into bytes
-    let bytes = args[1].from_hex_string().unwrap();
+fn gen_proof(bytes: &[u8], overflows: bool) {   
     // Disassemble bytes into instructions
     let disasm : Disassembly<CfaState> = Disassembly::new(&bytes).build();
     // Convert into instruction stream
@@ -378,19 +372,19 @@ fn main() {
 		println!("\tst := Swap(st,{});",n);
 	    }
             ADD => {
-                if OVERFLOW_DETECTION {
+                if overflows {
                     println!("\tassert (st.Peek(0) + st.Peek(1)) <= (MAX_U256 as u256);");
                 }
                 println!("\tst := Add(st);");
             }
             MUL => {
-                if OVERFLOW_DETECTION {
+                if overflows {
                     println!("\tassert (st.Peek(0) * st.Peek(1)) <= (MAX_U256 as u256);");
                 }
                 println!("\tst := Mul(st);");
             }
             SUB => {
-                if OVERFLOW_DETECTION {
+                if overflows {
                     println!("\tassert st.Peek(1) <= st.Peek(0);");
                 }
                 println!("\tst := Sub(st);");
@@ -413,15 +407,48 @@ fn main() {
 fn print_block_break(pc: usize, disasm : &Disassembly<CfaState>) {
     let st = disasm.get_state(pc);
     // Determine stack height on entry    
-    let stack_height = st.len();
+    let stack = st.stack();
+    let stack_height = stack.len();
     //
     println!("}}");
     println!();
     println!("method block_{:#08x}(st': ValidState)",pc);
     println!("requires st'.PC() == {:#08x}",pc);
     if stack_height.is_constant() {
-        println!("requires st'.Operands() == {} {{",stack_height.unwrap());
+        println!("requires st'.Operands() == {}",stack_height.unwrap());
     } else {
-        println!("requires st'.Operands() >= {} && st'.Operands() <= {} {{",stack_height.start,stack_height.end);
+        println!("requires st'.Operands() >= {} && st'.Operands() <= {}",stack_height.start,stack_height.end);
     }
+    //
+    for i in 0..stack.values().len() {
+        let ith = stack.peek(i);
+        match ith {
+            AbstractValue::Known(val) => {
+                println!("requires st'.Peek({}) == {:#08x}",i,val);
+            }
+            _ => {}
+        }
+    }
+    // Done
+    println!("{{");
+}
+
+
+// This is a hack script for now.
+fn main() {
+    //let args: Vec<String> = env::args().collect();
+    let matches = Command::new("devmpg")
+	.about("DafnyEvm Proof Generation Tool")
+        .arg(Arg::new("args"))
+        .arg(Arg::new("overflow").long("overflows"))
+        .get_matches();
+    // Extract arguments
+    let overflows = matches.is_present("overflow");
+    let args: Vec<_> = matches.get_many::<String>("args").unwrap().collect();
+    // Done
+    for arg in args {
+        // Parse hex string into bytes        
+        let bytes = arg.from_hex_string().unwrap();
+        gen_proof(&bytes, overflows);
+    }             
 }
