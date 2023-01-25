@@ -1,9 +1,9 @@
 use std::env;
 use clap::{arg, Arg, Command};
-use evmil::{Instruction,FromHexString,ToHexString,CfaState};
-use evmil::{AbstractState,Disassembly};
-use evmil::dfa::AbstractValue;
-use evmil::Instruction::*;
+use evmil::ll::{Instruction};
+use evmil::util::{Concretizable,FromHexString,ToHexString,Interval,w256,IsTop};
+use evmil::evm::{AbstractStack,Disassembly};
+use evmil::ll::Instruction::*;
 
 pub static OPCODES : &'static [&'static str] = &[
     "Stop", //             0x00
@@ -306,7 +306,7 @@ const BASIC_BLOCKS : bool = false;
 
 fn gen_proof(bytes: &[u8], overflows: bool) {   
     // Disassemble bytes into instructions
-    let disasm : Disassembly<CfaState> = Disassembly::new(&bytes).build();
+    let disasm : Disassembly<AbstractStack<Interval<w256>>> = Disassembly::new(&bytes).build();
     // Convert into instruction stream
     let instructions = disasm.to_vec();
     let mut pc = 0;
@@ -332,37 +332,35 @@ fn gen_proof(bytes: &[u8], overflows: bool) {
                 println!("\tvar st := JumpDest(st');");                        
             }
 	    JUMP => {
-		match disasm.get_state(pc).peek(0) {
-		    AbstractValue::Known(target) => {
-			// NOTE: following seems necessary in some cases.
-			println!("\tassume st.IsJumpDest({:#08x});",target);
-			println!("\tst := Jump(st);");
-			println!("\tblock_{:#08x}(st);", target);
-		    }
-		    AbstractValue::Unknown => {
-                        println!("\t// Unable to resolve JUMP address!");
-                        println!("\tassert false;");
-		    }
+                let target = disasm.get_state(pc).peek(0);
+                //
+                if target.is_constant() {
+		    // NOTE: following seems necessary in some cases.
+		    println!("\tassume st.IsJumpDest({:#08x});",target.constant());
+		    println!("\tst := Jump(st);");
+		    println!("\tblock_{:#08x}(st);", target.constant());
+		} else {
+                    println!("\t// Unable to resolve JUMP address!");
+                    println!("\tassert false;");
 		}
 	    }
 	    JUMPI => {
-		match disasm.get_state(pc).peek(0) {
-		    AbstractValue::Known(target) => {
-			println!("\tvar tmp{} := st.Peek(1);",pc);
-			// NOTE: following seems necessary in some cases.
-			println!("\tassume st.IsJumpDest({:#08x});",target);
-			println!("\tst := JumpI(st);");
-			println!("\tif tmp{} != 0 {{ block_{:#08x}(st); return; }}",pc,target);
-			if BASIC_BLOCKS {
-                            println!("\tblock_{:#08x}(st);", pc+1);
-                            print_block_break(pc, &disasm);
-                            println!("\tvar st := st';");
-                        }
-		    }
-		    AbstractValue::Unknown => {
-                        println!("\t// Unable to resolve JUMPI address!");
-                        println!("\tassert false;");                        
-		    }
+                let target = disasm.get_state(pc).peek(0);
+                //
+                if target.is_constant() {
+		    println!("\tvar tmp{} := st.Peek(1);",pc);
+		    // NOTE: following seems necessary in some cases.
+		    println!("\tassume st.IsJumpDest({:#08x});",target.constant());
+		    println!("\tst := JumpI(st);");
+		    println!("\tif tmp{} != 0 {{ block_{:#08x}(st); return; }}",pc,target.constant());
+		    if BASIC_BLOCKS {
+                        println!("\tblock_{:#08x}(st);", pc+1);
+                        print_block_break(pc, &disasm);
+                        println!("\tvar st := st';");
+                    }
+		} else {
+                    println!("\t// Unable to resolve JUMPI address!");
+                    println!("\tassert false;");                        
 		}
 	    }
 	    DUP(n) => {
@@ -404,10 +402,10 @@ fn gen_proof(bytes: &[u8], overflows: bool) {
     println!("}}");
 }
 
-fn print_block_break(pc: usize, disasm : &Disassembly<CfaState>) {
+fn print_block_break(pc: usize, disasm : &Disassembly<AbstractStack<Interval<w256>>>) {
     let st = disasm.get_state(pc);
     // Determine stack height on entry    
-    let stack = st.stack();
+    let stack = st.stack;
     let stack_height = stack.len();
     //
     println!("}}");
@@ -422,11 +420,13 @@ fn print_block_break(pc: usize, disasm : &Disassembly<CfaState>) {
     //
     for i in 0..stack.values().len() {
         let ith = stack.peek(i);
-        match ith {
-            AbstractValue::Known(val) => {
-                println!("requires st'.Peek({}) == {:#08x}",i,val);
+        //
+        if !ith.is_top() {
+            if ith.is_constant() {
+                println!("requires st'.Peek({}) == {:#08x}",i,ith.constant());
+            } else {
+                println!("requires st'.Peek({}) >= {:#08x} && st'.Peek({}) <= {:#08x}",i,ith.start,i,ith.end);
             }
-            _ => {}
         }
     }
     // Done
