@@ -271,8 +271,6 @@ fn print_preamble(bytes: &[u8]) {
     println!("import opened Opcode");
     println!("import opened Memory");
     println!("import opened Bytecode");
-    println!("import opened EvmBerlin");
-    println!("import opened EvmState");
     println!();
     print!("const BYTECODE : seq<u8> := [");
     for i in 0..bytes.len() {
@@ -281,10 +279,16 @@ fn print_preamble(bytes: &[u8]) {
     }
     println!("];");
     println!();
-    println!("type ValidState = st:State | st.OK? && st.WritesPermitted() && st.evm.code == Code.Create(BYTECODE)");
-    println!("witness OK(EVM(Context.Create(0,0,0,0,[],true,0,Context.Block.Info(0,0,0,0,0,0)),");
+    println!("type ValidState = st:EvmState.State | st.OK? && st.WritesPermitted() && st.evm.code == Code.Create(BYTECODE)");
+    println!("witness EvmState.OK(EvmState.EVM(Context.Create(0,0,0,0,[],true,0,Context.Block.Info(0,0,0,0,0,0)),");
     println!("           WorldState.Create(map[0:=WorldState.DefaultAccount()]),");
     println!("           Stack.Create(),Memory.Create(),Code.Create(BYTECODE),SubState.Create(),0,0))");
+    println!();
+    println!("method external_call(sender: u160, st: EvmState.OKState) returns (r:EvmState.State)");
+    println!("ensures r.RETURNS? || r.REVERTS? || r.INVALID?");
+    println!("ensures r.RETURNS? ==> r.world.Exists(sender) {{");    
+    println!("\t return EvmState.INVALID(EvmState.INSUFFICIENT_GAS); // dummy");
+    println!("}}");
     println!();
     println!("method main(context: Context.T, world: map<u160,WorldState.Account>, gas: nat)");
     println!("requires context.writePermission");
@@ -331,6 +335,9 @@ fn gen_proof(bytes: &[u8], overflows: bool) {
                 print_block_break(pc, &disasm);
                 println!("\tvar st := JumpDest(st');");                        
             }
+            CALL => {
+                print_call(pc);
+            }            
 	    JUMP => {
                 let target = disasm.get_state(pc).peek(0);
                 //
@@ -433,6 +440,14 @@ fn print_block_break(pc: usize, disasm : &Disassembly<AbstractStack<Interval<w25
     println!("{{");
 }
 
+fn print_call(pc: usize) {
+    println!("\tst := Call(st);");
+    println!("\t{{");
+    println!("\t\tvar inner := st.CallEnter(1);");
+    println!("\t\tif inner.OK? {{ inner := external_call(st.sender,inner); }}");
+    println!("\t\tst := st.CallReturn(inner);");    
+    println!("\t}}");    
+}
 
 // This is a hack script for now.
 fn main() {
