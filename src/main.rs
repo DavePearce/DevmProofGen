@@ -310,7 +310,9 @@ fn to_dfy_name(insn: &Instruction) -> String {
 /// larger blocks.
 const BASIC_BLOCKS: bool = false;
 
-fn gen_proof(bytes: &[u8], overflows: bool) {
+type PreconditionFn = fn(&Instruction);
+
+fn gen_proof(bytes: &[u8], preconditions: PreconditionFn) {
     print_preamble(&bytes);    
     // Disassemble bytes into instructions
     // Construct bytecode representation
@@ -320,45 +322,63 @@ fn gen_proof(bytes: &[u8], overflows: bool) {
     for s in &bytecode {  
         match s {
             Section::Code{insns,inputs,outputs,max_stack:_ } => {
-                print_code_section(id, insns, *inputs, *outputs, overflows)
+                print_code_section(id, insns, *inputs, *outputs, preconditions)
             }
-            Section::Data(bytes) => todo!()
+            Section::Data(bytes) => {
+                // For now.
+                println!("// {}",bytes.to_hex_string());                         
+            }
         }
         id = id + 1;
     }
 }
 
-fn print_code_section(id: usize, instructions: &[Instruction], inputs: u8, outputs: u8, overflows: bool) {
+fn print_code_section(id: usize, instructions: &[Instruction], inputs: u8, outputs: u8, preconditions: PreconditionFn) {
     let mut pc = 0;
     let mut block = false;
         
     for insn in instructions {
+        // If we are not currently within a block, then print out the
+        // block header.
         if !block {
             print_block_header(id,pc);
             block = true;
         }
+        // Check any preconditions
+        preconditions(insn);
         // Print out the instruction
-        print_instruction(insn,overflows);
-        // Update
-        pc = pc + insn.length();
-        if !insn.fallthru() {
-            // block terminator
+        print_instruction(insn);
+        // Move passed instruction
+        pc = pc + insn.length();        
+        // Manage control-flow
+        if !insn.fallthru() {           
+            if insn.can_branch() {
+                // Unconditional branch
+                println!("\tst := block_{:#08x}(st);", branch_target(pc,insn));
+            }
+            // Block terminator
             println!("\treturn st;");
             println!("}}");
             println!("");
             block = false;
+        } else if insn.can_branch() {
+            // Conditional branch
+            let target = branch_target(pc,insn);
+            println!(
+                "\tif st.PC() == {:#x} {{ st := block_{:#08x}(st); return st; }}",
+                target,target
+            );            
         }
     }
-    //
-    println!("}}");
 }
 
 
 fn print_block_header(id: usize, pc: usize) {
-    println!("method block_{:#02x}_{:#08x}(st': ValidState) returns (st'': EvmState.State)", id, pc);
+    println!("method block_{id}_{:#08x}(st': ValidState) returns (st'': EvmState.State)", pc);
+    println!("{{");
 }
 
-fn print_instruction(insn: &Instruction, overflows: bool) {
+fn print_instruction(insn: &Instruction) {
     match insn {
         DATA(bytes) => {
             println!("\t// {}", bytes.to_hex_string());
@@ -367,80 +387,38 @@ fn print_instruction(insn: &Instruction, overflows: bool) {
             let opcode = 0x5f + bytes.len();
             println!("\tst := {}(st,{});", OPCODES[opcode], bytes.to_hex_string());
         }
-        // JUMPDEST => {
-        //     if fallthru {
-        //         // Add explicit fallthru
-        //         println!("\tst := block_{:#08x}(st);", pc);
-        //         println!("\treturn st;");
-        //     }
-        //     print_block_break(pc, &disasm);
-        //     println!("\tvar st := JumpDest(st');");
-        // }
-        // CALL => {
-        //     print_call(pc);
-        // }
-        // JUMP => {
-        //     let target = disasm.get_state(pc).peek(0);
-        //     //
-        //     if target.is_constant() {
-        //         // NOTE: following seems necessary in some cases.
-        //         println!("\tassume st.IsJumpDest({:#08x});", target.constant());
-        //         println!("\tst := Jump(st);");
-        //         println!("\tst := block_{:#08x}(st); return st;", target.constant());
-        //     } else {
-        //         println!("\t// Unable to resolve JUMP address!");
-        //         println!("\tassert false;");
-        //     }
-        // }
-        // JUMPI => {
-        //     let target = disasm.get_state(pc).peek(0);
-        //     //
-        //     if target.is_constant() {
-        //         println!("\tvar tmp{} := st.Peek(1);", pc);
-        //         // NOTE: following seems necessary in some cases.
-        //         println!("\tassume st.IsJumpDest({:#08x});", target.constant());
-        //         println!("\tst := JumpI(st);");
-        //         println!(
-        //             "\tif tmp{} != 0 {{ st := block_{:#08x}(st); return st;}}",
-        //             pc,
-        //             target.constant()
-        //         );
-        //         if BASIC_BLOCKS {
-        //             println!("\tblock_{:#08x}(st);", pc + 1);
-        //             print_block_break(pc, &disasm);
-        //             println!("\tvar st := st';");
-        //         }
-        //     } else {
-        //         println!("\t// Unable to resolve JUMPI address!");
-        //         println!("\tassert false;");
-        //     }
-        // }
+        CALL => {
+            print_call();
+        }
         DUP(n) => {
             println!("\tst := Dup(st,{});", n);
+        }
+        RJUMP(offset) => {
+            println!("\tst := RJump(st,{offset:#x});");
+        }
+        RJUMPI(offset) => {
+            println!("\tst := RJumpI(st,{offset:#x});");
         }
         SWAP(n) => {
             println!("\tst := Swap(st,{});", n);
         }
-        ADD => {
-            if overflows {
-                println!("\tassert (st.Peek(0) + st.Peek(1)) <= (MAX_U256 as u256);");
-            }
-            println!("\tst := Add(st);");
-        }
-        MUL => {
-            if overflows {
-                println!("\tassert (st.Peek(0) * st.Peek(1)) <= (MAX_U256 as u256);");
-            }
-            println!("\tst := Mul(st);");
-        }
-        SUB => {
-            if overflows {
-                println!("\tassert st.Peek(1) <= st.Peek(0);");
-            }
-            println!("\tst := Sub(st);");
-        }
         _ => {
             println!("\tst := {}(st);", to_dfy_name(&insn));
+        }
+    }
+}
+
+// Determine the target of this branch
+fn branch_target(pc: usize, insn: &Instruction) -> usize {
+    match insn {
+        RJUMP(offset)|RJUMPI(offset) => {
+            // Compute absolute target based on pc value of following
+            // instruction.
+            let target = (pc as isize) + (*offset as isize);
+            target as usize
+        }
+        _ => {
+            panic!()
         }
     }
 }
@@ -482,14 +460,27 @@ fn print_instruction(insn: &Instruction, overflows: bool) {
 //     println!("{{");
 // }
 
-// fn print_call(pc: usize) {
-//     println!("\tst := Call(st);");
-//     println!("\t{{");
-//     println!("\t\tvar inner := st.CallEnter(1);");
-//     println!("\t\tif inner.OK? {{ inner := external_call(st.sender,inner); }}");
-//     println!("\t\tst := st.CallReturn(inner);");
-//     println!("\t}}");
-// }
+fn print_call() {
+    println!("\tst := Call(st);");
+    println!("\t{{");
+    println!("\t\tvar inner := st.CallEnter(1);");
+    println!("\t\tif inner.OK? {{ inner := external_call(st.sender,inner); }}");
+    println!("\t\tst := st.CallReturn(inner);");
+    println!("\t}}");
+}
+
+/// Add assertions to check against overflow / underflow in generated
+/// bytecode.
+fn overflow_checks(insn: &Instruction) {
+    match insn {
+        ADD => println!("\tassert (st.Peek(0) + st.Peek(1)) <= (MAX_U256 as u256);"),
+        MUL => println!("\tassert (st.Peek(0) * st.Peek(1)) <= (MAX_U256 as u256);"),
+        SUB => println!("\tassert st.Peek(1) <= st.Peek(0);"),
+        _ => {
+            // do nothing
+        }
+    }    
+}
 
 // This is a hack script for now.
 fn main() {
@@ -506,6 +497,6 @@ fn main() {
     for arg in args {
         // Parse hex string into bytes
         let bytes = arg.from_hex_string().unwrap();
-        gen_proof(&bytes, overflows);
+        gen_proof(&bytes, overflow_checks);
     }
 }
