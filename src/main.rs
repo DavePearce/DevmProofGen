@@ -279,17 +279,21 @@ fn print_preamble(bytes: &[u8]) {
     }
     println!("];");
     println!();
-    println!("type ValidState = st:EvmState.State | st.OK? && st.WritesPermitted() && st.evm.code == Code.Create(BYTECODE)");
-    println!("witness EvmState.OK(EvmState.EVM(Context.Create(0,0,0,0,[],true,0,Context.Block.Info(0,0,0,0,0,0)),");
-    println!("           WorldState.Create(map[0:=WorldState.DefaultAccount()]),");
-    println!(
-        "           Stack.Create(),Memory.Create(),Code.Create(BYTECODE),SubState.Create(),0,0))"
-    );
+    println!("const EVM_WITNESS : EvmState.Raw := EvmState.EVM(Context.DEFAULT,");
+    println!("Precompiled.DEFAULT,");
+    println!("WorldState.Create(map[0:=WorldState.DefaultAccount()]),");
+    println!("Stack.Create(),");
+    println!("Memory.Create(),");
+    println!("Code.Create(BYTECODE),");
+    println!("SubState.Create(),");
+    println!("0,0)");
     println!();
-    println!("method external_call(sender: u160, st: EvmState.OKState) returns (r:EvmState.State)");
-    println!("ensures r.RETURNS? || r.REVERTS? || r.INVALID?");
+    println!("type ValidState = st:EvmState.State | st.EXECUTING? && st.WritesPermitted() && st.evm.code == Code.Create(BYTECODE)");
+    println!("witness EvmState.EXECUTING(EVM_WITNESS)");
+    println!();
+    println!("method external_call(sender: u160, st: EvmState.ExecutingState) returns (r:EvmState.TerminatedState)");
     println!("ensures r.RETURNS? ==> r.world.Exists(sender) {{");
-    println!("\t return EvmState.INVALID(EvmState.INSUFFICIENT_GAS); // dummy");
+    println!("\t return EvmState.ERROR(EvmState.INSUFFICIENT_GAS); // dummy");
     println!("}}");
     println!();
     // println!("method main(context: Context.T, world: map<u160,WorldState.Account>, gas: nat) returns (st': EvmState.State)");
@@ -365,7 +369,7 @@ fn print_code_section(id: usize, instructions: &[Instruction], inputs: u8, outpu
             // Conditional branch
             let target = branch_target(pc,insn);
             println!(
-                "\tif st.PC() == {:#x} {{ st := block_{:#08x}(st); return st; }}",
+                "\tif st.PC() == {:#x} {{ st := block_{id}_{:#08x}(st); return st; }}",
                 target,target
             );            
         }
@@ -376,6 +380,7 @@ fn print_code_section(id: usize, instructions: &[Instruction], inputs: u8, outpu
 fn print_block_header(id: usize, pc: usize) {
     println!("method block_{id}_{:#08x}(st': ValidState) returns (st'': EvmState.State)", pc);
     println!("{{");
+    println!("\tvar st := st';");
 }
 
 fn print_instruction(insn: &Instruction) {
@@ -464,7 +469,7 @@ fn print_call() {
     println!("\tst := Call(st);");
     println!("\t{{");
     println!("\t\tvar inner := st.CallEnter(1);");
-    println!("\t\tif inner.OK? {{ inner := external_call(st.sender,inner); }}");
+    println!("\t\tif inner.EXECUTING? {{ inner := external_call(st.sender,inner); }}");
     println!("\t\tst := st.CallReturn(inner);");
     println!("\t}}");
 }
