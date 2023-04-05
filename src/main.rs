@@ -270,27 +270,6 @@ fn print_preamble(bytes: &[u8]) {
     println!("import opened Memory");
     println!("import opened Bytecode");
     println!();
-    print!("const BYTECODE : seq<u8> := [");
-    for i in 0..bytes.len() {
-        print!("{:#02x}", bytes[i]);
-        if (i + 1) != bytes.len() {
-            print!(", ");
-        }
-    }
-    println!("];");
-    println!();
-    println!("const EVM_WITNESS : EvmState.Raw := EvmState.EVM(Context.DEFAULT,");
-    println!("Precompiled.DEFAULT,");
-    println!("WorldState.Create(map[0:=WorldState.DefaultAccount()]),");
-    println!("Stack.Create(),");
-    println!("Memory.Create(),");
-    println!("Code.Create(BYTECODE),");
-    println!("SubState.Create(),");
-    println!("0,0)");
-    println!();
-    println!("type ValidState = st:EvmState.State | st.EXECUTING? && st.WritesPermitted() && st.evm.code == Code.Create(BYTECODE)");
-    println!("witness EvmState.EXECUTING(EVM_WITNESS)");
-    println!();
     println!("method external_call(sender: u160, st: EvmState.ExecutingState) returns (r:EvmState.TerminatedState)");
     println!("ensures r.RETURNS? ==> r.world.Exists(sender) {{");
     println!("\t return EvmState.ERROR(EvmState.INSUFFICIENT_GAS); // dummy");
@@ -340,7 +319,9 @@ fn gen_proof(bytes: &[u8], preconditions: PreconditionFn) {
 fn print_code_section(id: usize, instructions: &[Instruction], inputs: u8, outputs: u8, preconditions: PreconditionFn) {
     let mut pc = 0;
     let mut block = false;
-        
+    // Print out the bytecode (only for legacy contracts?)
+    print_code_bytecode(id,instructions);
+    //
     for insn in instructions {
         // If we are not currently within a block, then print out the
         // block header.
@@ -376,9 +357,28 @@ fn print_code_section(id: usize, instructions: &[Instruction], inputs: u8, outpu
     }
 }
 
+fn print_code_bytecode(id: usize, insns: &[Instruction]) {
+    // Convert instructions into bytes
+    let mut bytes = Vec::new();
+    for b in insns {
+        b.encode(&mut bytes).unwrap();
+    }
+    //
+    print!("const BYTECODE_{id} : seq<u8> := [");
+    for i in 0..bytes.len() {
+        print!("{:#02x}", bytes[i]);
+        if (i + 1) != bytes.len() {
+            print!(", ");
+        }
+    }
+    println!("];");
+    println!();
+}    
 
 fn print_block_header(id: usize, pc: usize) {
-    println!("method block_{id}_{:#08x}(st': ValidState) returns (st'': EvmState.State)", pc);
+    println!("method block_{id}_{:#08x}(st': EvmState.ExecutingState) returns (st'': EvmState.State)", pc);
+    println!("requires st'.evm.code == Code.Create(BYTECODE_{id});");
+    println!("requires st'.WritesPermitted() && st'.PC() == {pc:#02x}");
     println!("{{");
     println!("\tvar st := st';");
 }
