@@ -345,13 +345,13 @@ fn print_code_section(id: usize, instructions: &[Instruction], analysis: &Execut
         // If we are not currently within a block, then print out the
         // block header.        
         if !block {
-            print_block_header(id,pc);
+            print_block_header(id,pc,analysis);
             block = true;
         }
         // Check any preconditions
         preconditions(insn);
         // Print out the instruction
-        print_instruction(insn);
+        print_instruction(pc,insn,analysis);
         // Manage control-flow
         if !insn.fallthru() {           
             if insn.can_branch() {
@@ -394,15 +394,24 @@ fn print_code_bytecode(id: usize, insns: &[Instruction]) {
     println!();
 }    
 
-fn print_block_header(id: usize, pc: usize) {
+fn print_block_header(id: usize, pc: usize, analysis: &ExecutionSection<LegacyEvmState>) {
+    // First compute upper and lower bounds on the stack height.
+    let (min,max) = determine_stack_size(pc,analysis);
+    //    
     println!("method block_{id}_{:#08x}(st': EvmState.ExecutingState) returns (st'': EvmState.State)", pc);
     println!("requires st'.evm.code == Code.Create(BYTECODE_{id});");
     println!("requires st'.WritesPermitted() && st'.PC() == {pc:#02x}");
+    // 
+    if min == max {
+        println!("requires st'.Operands() == {max}");
+    } else {
+        println!("requires {min} <= st'.Operands() <= {max}");
+    }
     println!("{{");
     println!("\tvar st := st';");
 }
 
-fn print_instruction(insn: &Instruction) {
+fn print_instruction(pc: usize, insn: &Instruction, analysis: &ExecutionSection<LegacyEvmState>) {
     match insn {
         DATA(bytes) => {
             println!("\t// {}", bytes.to_hex_string());
@@ -416,6 +425,10 @@ fn print_instruction(insn: &Instruction) {
         }
         DUP(n) => {
             println!("\tst := Dup(st,{});", n);
+        }
+        JUMP|JUMPI => {
+            println!("\tassume st.IsJumpDest({:#x});",branch_target(pc,insn,analysis));
+            println!("\tst := {}(st);", to_dfy_name(&insn));            
         }
         RJUMP(offset) => {
             println!("\tst := RJump(st,{offset:#x});");
@@ -431,6 +444,18 @@ fn print_instruction(insn: &Instruction) {
         }
     }
 }
+
+fn determine_stack_size(pc: usize, analysis: &ExecutionSection<LegacyEvmState>) -> (usize,usize) {
+    let mut min = usize::MAX;
+    let mut max = 0;
+    // 
+    for s in analysis[pc].iter() {    
+        min = min.min(s.stack().size());
+        max = max.max(s.stack().size());        
+    }
+    //
+    (min,max)
+}    
 
 // Determine the target of this branch
 fn branch_target(mut pc: usize, insn: &Instruction, analysis: &ExecutionSection<LegacyEvmState>) -> usize {
