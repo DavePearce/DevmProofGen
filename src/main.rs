@@ -1,9 +1,9 @@
-use clap::{arg, Arg, Command};
-use evmil::evm::{AbstractStack, Disassembly};
-use evmil::ll::Instruction;
-use evmil::ll::Instruction::*;
-use evmil::util::{w256, Concretizable, FromHexString, Interval, IsTop, ToHexString};
-use std::env;
+use clap::{Arg, Command};
+use evmil::evm::legacy;
+use evmil::evm::legacy::{LegacyEvmState};
+use evmil::evm::{AssemblyInstruction, Bytecode, Execution, ExecutionSection, EvmState, EvmStack, Instruction, Section};
+use evmil::evm::AbstractInstruction::*;
+use evmil::util::{FromHexString,ToHexString,Concretizable};
 
 pub static OPCODES: &'static [&'static str] = &[
     "Stop",           //             0x00
@@ -98,8 +98,8 @@ pub static OPCODES: &'static [&'static str] = &[
     "MSize",          //            0x59
     "Gas",            //              0x5a
     "JumpDest",       //         0x5b
-    "",               //                 0x5c
-    "",               //                 0x5d
+    "RJump",          //                 0x5c
+    "RJumpI",         //                 0x5d
     "",               //                 0x5e
     "",               //                 0x5f
     "Push1",          //            0x60
@@ -272,38 +272,21 @@ fn print_preamble(bytes: &[u8]) {
     println!("import opened Memory");
     println!("import opened Bytecode");
     println!();
-    print!("const BYTECODE : seq<u8> := [");
-    for i in 0..bytes.len() {
-        print!("{:#02x}", bytes[i]);
-        if (i + 1) != bytes.len() {
-            print!(", ");
-        }
-    }
-    println!("];");
-    println!();
-    println!("type ValidState = st:EvmState.State | st.OK? && st.WritesPermitted() && st.evm.code == Code.Create(BYTECODE)");
-    println!("witness EvmState.OK(EvmState.EVM(Context.Create(0,0,0,0,[],true,0,Context.Block.Info(0,0,0,0,0,0)),");
-    println!("           WorldState.Create(map[0:=WorldState.DefaultAccount()]),");
-    println!(
-        "           Stack.Create(),Memory.Create(),Code.Create(BYTECODE),SubState.Create(),0,0))"
-    );
-    println!();
-    println!("method external_call(sender: u160, st: EvmState.OKState) returns (r:EvmState.State)");
-    println!("ensures r.RETURNS? || r.REVERTS? || r.INVALID?");
+    println!("method external_call(sender: u160, st: EvmState.ExecutingState) returns (r:EvmState.TerminatedState)");
     println!("ensures r.RETURNS? ==> r.world.Exists(sender) {{");
-    println!("\t return EvmState.INVALID(EvmState.INSUFFICIENT_GAS); // dummy");
+    println!("\t return EvmState.ERROR(EvmState.INSUFFICIENT_GAS); // dummy");
     println!("}}");
     println!();
-    println!("method main(context: Context.T, world: map<u160,WorldState.Account>, gas: nat) returns (st': EvmState.State)");
-    println!("requires context.writePermission");
-    println!("requires gas > 100000");
-    println!("requires context.address in world {{");
-    println!("\tvar st := EvmBerlin.Create(context,world,gas,BYTECODE);");
+    // println!("method main(context: Context.T, world: map<u160,WorldState.Account>, gas: nat) returns (st': EvmState.State)");
+    // println!("requires context.writePermission");
+    // println!("requires gas > 100000");
+    // println!("requires context.address in world {{");
+    // println!("\tvar st := EvmBerlin.Create(context,world,gas,BYTECODE);");
 }
 
 fn to_dfy_name(insn: &Instruction) -> String {
     // Determine opcode
-    let opcode = insn.opcode(&[]).unwrap();
+    let opcode = insn.opcode().unwrap();
     //
     OPCODES[opcode as usize].to_string()
 }
@@ -312,159 +295,217 @@ fn to_dfy_name(insn: &Instruction) -> String {
 /// larger blocks.
 const BASIC_BLOCKS: bool = false;
 
-fn gen_proof(bytes: &[u8], overflows: bool) {
+type PreconditionFn = fn(&Instruction);
+
+fn gen_proof(bytes: &[u8], preconditions: PreconditionFn) {
+    print_preamble(&bytes);    
     // Disassemble bytes into instructions
-    let disasm: Disassembly<AbstractStack<Interval<w256>>> = Disassembly::new(&bytes).build();
-    // Convert into instruction stream
-    let instructions = disasm.to_vec();
+    // Construct bytecode representation
+    let asm = legacy::from_bytes(&bytes);
+    let bytecode = asm.assemble().unwrap();
+    // Compute analysis results
+    let mut execution : Execution<LegacyEvmState> = Execution::new(&bytecode);
+    // Run execution (and for now hope it succeeds!)
+    execution.execute(LegacyEvmState::new());    
+    //
+    let mut id = 0;
+    for s in &bytecode {  
+        match s {
+            Section::Code(insns) => {
+		let analysis = &execution[id];
+                print_code_section(id, insns, analysis, preconditions)
+            }
+            Section::Data(bytes) => {
+                // For now.
+                println!("// {}",bytes.to_hex_string());                         
+            }
+        }
+        id = id + 1;
+    }
+}
+
+fn print_code_section(id: usize, instructions: &[Instruction], analysis: &ExecutionSection<LegacyEvmState>, preconditions: PreconditionFn) {
     let mut pc = 0;
-    let mut fallthru = true;
+    let mut block = false;
+    // Print out the bytecode (only for legacy contracts?)
+    print_code_bytecode(id,instructions);
     //
-    print_preamble(&bytes);
-    //
-    for insn in &instructions {
-        match insn {
-            DATA(bytes) => {
-                println!("\t// {}", bytes.to_hex_string());
-            }
-            PUSH(bytes) => {
-                let opcode = 0x5f + bytes.len();
-                println!("\tst := {}(st,{});", OPCODES[opcode], bytes.to_hex_string());
-            }
-            JUMPDEST(_) => {
-                if fallthru {
-                    // Add explicit fallthru
-                    println!("\tst := block_{:#08x}(st);", pc);
-                    println!("\treturn st;");
-                }
-                print_block_break(pc, &disasm);
-                println!("\tvar st := JumpDest(st');");
-            }
-            CALL => {
-                print_call(pc);
-            }
-            JUMP => {
-                let target = disasm.get_state(pc).peek(0);
-                //
-                if target.is_constant() {
-                    // NOTE: following seems necessary in some cases.
-                    println!("\tassume st.IsJumpDest({:#08x});", target.constant());
-                    println!("\tst := Jump(st);");
-                    println!("\tst := block_{:#08x}(st); return st;", target.constant());
-                } else {
-                    println!("\t// Unable to resolve JUMP address!");
-                    println!("\tassert false;");
-                }
-            }
-            JUMPI => {
-                let target = disasm.get_state(pc).peek(0);
-                //
-                if target.is_constant() {
-                    println!("\tvar tmp{} := st.Peek(1);", pc);
-                    // NOTE: following seems necessary in some cases.
-                    println!("\tassume st.IsJumpDest({:#08x});", target.constant());
-                    println!("\tst := JumpI(st);");
-                    println!(
-                        "\tif tmp{} != 0 {{ st := block_{:#08x}(st); return st;}}",
-                        pc,
-                        target.constant()
-                    );
-                    if BASIC_BLOCKS {
-                        println!("\tblock_{:#08x}(st);", pc + 1);
-                        print_block_break(pc, &disasm);
-                        println!("\tvar st := st';");
-                    }
-                } else {
-                    println!("\t// Unable to resolve JUMPI address!");
-                    println!("\tassert false;");
-                }
-            }
-            DUP(n) => {
-                println!("\tst := Dup(st,{});", n);
-            }
-            SWAP(n) => {
-                println!("\tst := Swap(st,{});", n);
-            }
-            ADD => {
-                if overflows {
-                    println!("\tassert (st.Peek(0) + st.Peek(1)) <= (MAX_U256 as u256);");
-                }
-                println!("\tst := Add(st);");
-            }
-            MUL => {
-                if overflows {
-                    println!("\tassert (st.Peek(0) * st.Peek(1)) <= (MAX_U256 as u256);");
-                }
-                println!("\tst := Mul(st);");
-            }
-            SUB => {
-                if overflows {
-                    println!("\tassert st.Peek(1) <= st.Peek(0);");
-                }
-                println!("\tst := Sub(st);");
-            }
-            _ => {
-                println!("\tst := {}(st);", to_dfy_name(&insn));
-            }
+    for insn in instructions {
+        // If we are not currently within a block, then print out the
+        // block header.
+        if !block {
+            print_block_header(id,pc);
+            block = true;
         }
-        pc = pc + insn.length(&[]);
-        if fallthru && !insn.fallthru() {
+        // Check any preconditions
+        preconditions(insn);
+        // Print out the instruction
+        print_instruction(insn);
+        // Manage control-flow
+        if !insn.fallthru() {           
+            if insn.can_branch() {
+                // Unconditional branch
+                println!("\tst := block_{:#08x}(st);", branch_target(pc,insn,analysis));
+            }
+            // Block terminator
             println!("\treturn st;");
+            println!("}}");
+            println!("");
+            block = false;
+        } else if insn.can_branch() {
+            // Conditional branch
+            let target = branch_target(pc,insn,analysis);
+            println!(
+                "\tif st.PC() == {:#x} {{ st := block_{id}_{:#08x}(st); return st; }}",
+                target,target
+            );            
         }
-        fallthru = insn.fallthru();
+        // Move passed instruction
+        pc = pc + insn.length();        
     }
-    // Print terminator (if necessary)
-    if fallthru {
-        println!("\tassert st.OK?;");
-    }
-    //
-    println!("}}");
 }
 
-fn print_block_break(pc: usize, disasm: &Disassembly<AbstractStack<Interval<w256>>>) {
-    let st = disasm.get_state(pc);
-    // Determine stack height on entry
-    let stack = st.stack;
-    let stack_height = stack.len();
+fn print_code_bytecode(id: usize, insns: &[Instruction]) {
+    // Convert instructions into bytes
+    let mut bytes = Vec::new();
+    for b in insns {
+        b.encode(&mut bytes).unwrap();
+    }
     //
-    println!("}}");
+    print!("const BYTECODE_{id} : seq<u8> := [");
+    for i in 0..bytes.len() {
+        print!("{:#02x}", bytes[i]);
+        if (i + 1) != bytes.len() {
+            print!(", ");
+        }
+    }
+    println!("];");
     println!();
-    println!("method block_{:#08x}(st': ValidState) returns (st'': EvmState.State)", pc);
-    println!("requires st'.PC() == {:#08x}", pc);
-    if stack_height.is_constant() {
-        println!("requires st'.Operands() == {}", stack_height.unwrap());
-    } else {
-        println!(
-            "requires st'.Operands() >= {} && st'.Operands() <= {}",
-            stack_height.start, stack_height.end
-        );
-    }
-    //
-    for i in 0..stack.values().len() {
-        let ith = stack.peek(i);
-        //
-        if !ith.is_top() {
-            if ith.is_constant() {
-                println!("requires st'.Peek({}) == {:#08x}", i, ith.constant());
-            } else {
-                println!(
-                    "requires st'.Peek({}) >= {:#08x} && st'.Peek({}) <= {:#08x}",
-                    i, ith.start, i, ith.end
-                );
-            }
-        }
-    }
-    // Done
+}    
+
+fn print_block_header(id: usize, pc: usize) {
+    println!("method block_{id}_{:#08x}(st': EvmState.ExecutingState) returns (st'': EvmState.State)", pc);
+    println!("requires st'.evm.code == Code.Create(BYTECODE_{id});");
+    println!("requires st'.WritesPermitted() && st'.PC() == {pc:#02x}");
     println!("{{");
+    println!("\tvar st := st';");
 }
 
-fn print_call(pc: usize) {
+fn print_instruction(insn: &Instruction) {
+    match insn {
+        DATA(bytes) => {
+            println!("\t// {}", bytes.to_hex_string());
+        }
+        PUSH(bytes) => {
+            let opcode = 0x5f + bytes.len();
+            println!("\tst := {}(st,{});", OPCODES[opcode], bytes.to_hex_string());
+        }
+        CALL => {
+            print_call();
+        }
+        DUP(n) => {
+            println!("\tst := Dup(st,{});", n);
+        }
+        RJUMP(offset) => {
+            println!("\tst := RJump(st,{offset:#x});");
+        }
+        RJUMPI(offset) => {
+            println!("\tst := RJumpI(st,{offset:#x});");
+        }
+        SWAP(n) => {
+            println!("\tst := Swap(st,{});", n);
+        }
+        _ => {
+            println!("\tst := {}(st);", to_dfy_name(&insn));
+        }
+    }
+}
+
+// Determine the target of this branch
+fn branch_target(mut pc: usize, insn: &Instruction, analysis: &ExecutionSection<LegacyEvmState>) -> usize {
+    match insn {
+        RJUMP(offset)|RJUMPI(offset) => {
+            // Push pc to past this instruction
+            pc += insn.length();
+            // Compute absolute target based on pc value of following
+            // instruction.
+            let target = (pc as isize) + (*offset as isize);
+            target as usize
+        }
+	JUMP|JUMPI => {
+	    let mut targets = Vec::new();
+	    for s in analysis[pc].iter() {
+		targets.push(s.stack().peek(0).constant());
+	    }
+            // For now, I'm just going to assume this is true.  In
+            // situations where we have call/return ... it definitely
+            // will not be.
+	    assert_eq!(targets.len(),1);
+	    targets[0].into()
+	}
+        _ => {
+            unreachable!()
+        }
+    }
+}
+
+// fn print_block_break(pc: usize, disasm: &Disassembly<AbstractStack<Interval<w256>>>) {
+//     let st = disasm.get_state(pc);
+//     // Determine stack height on entry
+//     let stack = st.stack;
+//     let stack_height = stack.len();
+//     //
+//     println!("}}");
+//     println!();
+//     println!("method block_{:#08x}(st': ValidState) returns (st'': EvmState.State)", pc);
+//     println!("requires st'.PC() == {:#08x}", pc);
+//     if stack_height.is_constant() {
+//         println!("requires st'.Operands() == {}", stack_height.unwrap());
+//     } else {
+//         println!(
+//             "requires st'.Operands() >= {} && st'.Operands() <= {}",
+//             stack_height.start, stack_height.end
+//         );
+//     }
+//     //
+//     for i in 0..stack.values().len() {
+//         let ith = stack.peek(i);
+//         //
+//         if !ith.is_top() {
+//             if ith.is_constant() {
+//                 println!("requires st'.Peek({}) == {:#08x}", i, ith.constant());
+//             } else {
+//                 println!(
+//                     "requires st'.Peek({}) >= {:#08x} && st'.Peek({}) <= {:#08x}",
+//                     i, ith.start, i, ith.end
+//                 );
+//             }
+//         }
+//     }
+//     // Done
+//     println!("{{");
+// }
+
+fn print_call() {
     println!("\tst := Call(st);");
     println!("\t{{");
     println!("\t\tvar inner := st.CallEnter(1);");
-    println!("\t\tif inner.OK? {{ inner := external_call(st.sender,inner); }}");
+    println!("\t\tif inner.EXECUTING? {{ inner := external_call(st.sender,inner); }}");
     println!("\t\tst := st.CallReturn(inner);");
     println!("\t}}");
+}
+
+/// Add assertions to check against overflow / underflow in generated
+/// bytecode.
+fn overflow_checks(insn: &Instruction) {
+    match insn {
+        ADD => println!("\tassert (st.Peek(0) + st.Peek(1)) <= (MAX_U256 as u256);"),
+        MUL => println!("\tassert (st.Peek(0) * st.Peek(1)) <= (MAX_U256 as u256);"),
+        SUB => println!("\tassert st.Peek(1) <= st.Peek(0);"),
+        _ => {
+            // do nothing
+        }
+    }    
 }
 
 // This is a hack script for now.
@@ -482,6 +523,6 @@ fn main() {
     for arg in args {
         // Parse hex string into bytes
         let bytes = arg.from_hex_string().unwrap();
-        gen_proof(&bytes, overflows);
+        gen_proof(&bytes, overflow_checks);
     }
 }
