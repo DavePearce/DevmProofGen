@@ -331,8 +331,19 @@ fn print_code_section(id: usize, instructions: &[Instruction], analysis: &Execut
     print_code_bytecode(id,instructions);
     //
     for insn in instructions {
+        // Manage jump dests
+        if block && insn == &Instruction::JUMPDEST {
+            // Jumpdest detected.  Therefore, we need to break the
+            // current block up.
+            println!("\tst := block_{id}_{:#08x}(st);",pc);
+            // Block terminator
+            println!("\treturn st;");
+            println!("}}");
+            println!("");
+            block = false;
+        }
         // If we are not currently within a block, then print out the
-        // block header.
+        // block header.        
         if !block {
             print_block_header(id,pc);
             block = true;
@@ -345,7 +356,7 @@ fn print_code_section(id: usize, instructions: &[Instruction], analysis: &Execut
         if !insn.fallthru() {           
             if insn.can_branch() {
                 // Unconditional branch
-                println!("\tst := block_{:#08x}(st);", branch_target(pc,insn,analysis));
+                println!("\tst := block_{id}_{:#08x}(st);", branch_target(pc,insn,analysis));
             }
             // Block terminator
             println!("\treturn st;");
@@ -361,7 +372,7 @@ fn print_code_section(id: usize, instructions: &[Instruction], analysis: &Execut
             );            
         }
         // Move passed instruction
-        pc = pc + insn.length();        
+        pc = pc + insn.length();
     }
 }
 
