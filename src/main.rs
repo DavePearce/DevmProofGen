@@ -1,7 +1,9 @@
 use clap::{Arg, Command};
-use evmil::evm::{Bytecode, Instruction, Section};
-use evmil::evm::Instruction::*;
-use evmil::util::{FromHexString,ToHexString};
+use evmil::evm::legacy;
+use evmil::evm::legacy::{LegacyEvmState};
+use evmil::evm::{AssemblyInstruction, Bytecode, Execution, ExecutionSection, EvmState, EvmStack, Instruction, Section};
+use evmil::evm::AbstractInstruction::*;
+use evmil::util::{FromHexString,ToHexString,Concretizable};
 
 pub static OPCODES: &'static [&'static str] = &[
     "Stop",           //             0x00
@@ -299,13 +301,19 @@ fn gen_proof(bytes: &[u8], preconditions: PreconditionFn) {
     print_preamble(&bytes);    
     // Disassemble bytes into instructions
     // Construct bytecode representation
-    let bytecode = Bytecode::from_bytes(&bytes).unwrap();
+    let asm = legacy::from_bytes(&bytes);
+    let bytecode = asm.assemble().unwrap();
+    // Compute analysis results
+    let mut execution : Execution<LegacyEvmState> = Execution::new(&bytecode);
+    // Run execution (and for now hope it succeeds!)
+    execution.execute(LegacyEvmState::new());    
     //
     let mut id = 0;
     for s in &bytecode {  
         match s {
-            Section::Code{insns,inputs,outputs,max_stack:_ } => {
-                print_code_section(id, insns, *inputs, *outputs, preconditions)
+            Section::Code(insns) => {
+		let analysis = &execution[id];
+                print_code_section(id, insns, analysis, preconditions)
             }
             Section::Data(bytes) => {
                 // For now.
@@ -316,7 +324,7 @@ fn gen_proof(bytes: &[u8], preconditions: PreconditionFn) {
     }
 }
 
-fn print_code_section(id: usize, instructions: &[Instruction], inputs: u8, outputs: u8, preconditions: PreconditionFn) {
+fn print_code_section(id: usize, instructions: &[Instruction], analysis: &ExecutionSection<LegacyEvmState>, preconditions: PreconditionFn) {
     let mut pc = 0;
     let mut block = false;
     // Print out the bytecode (only for legacy contracts?)
@@ -333,13 +341,11 @@ fn print_code_section(id: usize, instructions: &[Instruction], inputs: u8, outpu
         preconditions(insn);
         // Print out the instruction
         print_instruction(insn);
-        // Move passed instruction
-        pc = pc + insn.length();        
         // Manage control-flow
         if !insn.fallthru() {           
             if insn.can_branch() {
                 // Unconditional branch
-                println!("\tst := block_{:#08x}(st);", branch_target(pc,insn));
+                println!("\tst := block_{:#08x}(st);", branch_target(pc,insn,analysis));
             }
             // Block terminator
             println!("\treturn st;");
@@ -348,12 +354,14 @@ fn print_code_section(id: usize, instructions: &[Instruction], inputs: u8, outpu
             block = false;
         } else if insn.can_branch() {
             // Conditional branch
-            let target = branch_target(pc,insn);
+            let target = branch_target(pc,insn,analysis);
             println!(
                 "\tif st.PC() == {:#x} {{ st := block_{id}_{:#08x}(st); return st; }}",
                 target,target
             );            
         }
+        // Move passed instruction
+        pc = pc + insn.length();        
     }
 }
 
@@ -414,16 +422,29 @@ fn print_instruction(insn: &Instruction) {
 }
 
 // Determine the target of this branch
-fn branch_target(pc: usize, insn: &Instruction) -> usize {
+fn branch_target(mut pc: usize, insn: &Instruction, analysis: &ExecutionSection<LegacyEvmState>) -> usize {
     match insn {
         RJUMP(offset)|RJUMPI(offset) => {
+            // Push pc to past this instruction
+            pc += insn.length();
             // Compute absolute target based on pc value of following
             // instruction.
             let target = (pc as isize) + (*offset as isize);
             target as usize
         }
+	JUMP|JUMPI => {
+	    let mut targets = Vec::new();
+	    for s in analysis[pc].iter() {
+		targets.push(s.stack().peek(0).constant());
+	    }
+            // For now, I'm just going to assume this is true.  In
+            // situations where we have call/return ... it definitely
+            // will not be.
+	    assert_eq!(targets.len(),1);
+	    targets[0].into()
+	}
         _ => {
-            panic!()
+            unreachable!()
         }
     }
 }
