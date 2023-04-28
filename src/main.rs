@@ -523,11 +523,11 @@ fn branch_target(mut pc: usize, insn: &Instruction, analysis: &ExecutionSection<
 // }
 
 fn print_call() {
-    println!("\tst := Call(st);");
+    println!("\tvar CONTINUING(cc) := Call(st);");
     println!("\t{{");
-    println!("\t\tvar inner := st.CallEnter(1);");
-    println!("\t\tif inner.EXECUTING? {{ inner := external_call(st.sender,inner); }}");
-    println!("\t\tst := st.CallReturn(inner);");
+    println!("\t\tvar inner := cc.CallEnter(1);");
+    println!("\t\tif inner.EXECUTING? {{ inner := external_call(cc.sender,inner); }}");
+    println!("\t\tst := cc.CallReturn(inner);");
     println!("\t}}");
 }
 
