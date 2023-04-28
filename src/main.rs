@@ -401,11 +401,25 @@ fn print_block_header(id: usize, pc: usize, analysis: &ExecutionSection<LegacyEv
     println!("method block_{id}_{:#08x}(st': EvmState.ExecutingState) returns (st'': EvmState.State)", pc);
     println!("requires st'.evm.code == Code.Create(BYTECODE_{id});");
     println!("requires st'.WritesPermitted() && st'.PC() == {pc:#02x}");
-    // 
+    // Limit stack height
     if min == max {
         println!("requires st'.Operands() == {max}");
     } else {
         println!("requires {min} <= st'.Operands() <= {max}");
+    }
+    // Figure out concrete stack values
+    for i in 0..min {
+        match extract_stack_values(i,pc,analysis) {
+            Some(items) => {
+                print!("requires ");
+                for j in 0..items.len() {
+                    if j != 0 { print!(" || "); }
+                    print!("(st'.Peek({i}) == {:#x})",items[j]);
+                }
+                println!();
+            }
+            None => { }
+        }
     }
     println!("{{");
     println!("\tvar st := st';");
@@ -455,6 +469,25 @@ fn determine_stack_size(pc: usize, analysis: &ExecutionSection<LegacyEvmState>) 
     }
     //
     (min,max)
+}    
+
+fn extract_stack_values(i: usize, pc: usize, analysis: &ExecutionSection<LegacyEvmState>) -> Option<Vec<usize>> {
+    let mut values = Vec::new();
+    // 
+    for s in analysis[pc].iter() {    
+        let v = s.stack().peek(i);
+        if v.is_constant() {
+            // FIXME: unsafe for large w256 values.
+            values.push(v.constant().into());
+        } else {
+            // In this case, we have any unknown value so we cannot
+            // conclude anything useful.
+            return None;
+        }
+            
+    }
+    //
+    Some(values)
 }    
 
 // Determine the target of this branch
