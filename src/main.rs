@@ -335,7 +335,7 @@ fn print_code_section(id: usize, instructions: &[Instruction], analysis: &Execut
         if block && insn == &Instruction::JUMPDEST {
             // Jumpdest detected.  Therefore, we need to break the
             // current block up.
-            println!("\tst := block_{id}_{:#08x}(st);",pc);
+            println!("\tst := block_{id}_{:#06x}(st);",pc);
             // Block terminator
             println!("\treturn st;");
             println!("}}");
@@ -356,7 +356,17 @@ fn print_code_section(id: usize, instructions: &[Instruction], analysis: &Execut
         if !insn.fallthru() {           
             if insn.can_branch() {
                 // Unconditional branch
-                println!("\tst := block_{id}_{:#08x}(st);", branch_target(pc,insn,analysis));
+                let targets = branch_targets(pc,insn,analysis);
+                //
+                if targets.len() == 1 {
+                    println!("\tst := block_{id}_{:#06x}(st);", targets[0]);
+                } else {
+                    println!("\tmatch st.PC() {{");
+                    for target in targets {
+                        println!("\t\tcase {target:#x} => {{ st := block_{id}_{target:#06x}(st); }}");
+                    }
+                    println!("\t}}");
+                }
             }
             // Block terminator
             println!("\treturn st;");
@@ -365,11 +375,18 @@ fn print_code_section(id: usize, instructions: &[Instruction], analysis: &Execut
             block = false;
         } else if insn.can_branch() {
             // Conditional branch
-            let target = branch_target(pc,insn,analysis);
-            println!(
-                "\tif st.PC() == {:#x} {{ st := block_{id}_{:#08x}(st); return st; }}",
-                target,target
-            );            
+            let targets = branch_targets(pc,insn,analysis);
+            if targets.len() == 1 {
+                let target = targets[0];
+                println!("\tif st.PC() == {target:#x} {{ st := block_{id}_{target:#06x}(st); return st; }}");                
+            } else {
+                println!("\tmatch st.PC() {{");
+                for target in targets {
+                    println!("\t\tcase {target:#x} => {{ st := block_{id}_{target:#06x}(st); return st; }}");                
+                }
+                println!("\t\tcase _ => {{}}");
+                println!("\t}}");
+            }
         }
         // Move passed instruction
         pc = pc + insn.length();
@@ -398,28 +415,34 @@ fn print_block_header(id: usize, pc: usize, analysis: &ExecutionSection<LegacyEv
     // First compute upper and lower bounds on the stack height.
     let (min,max) = determine_stack_size(pc,analysis);
     //    
-    println!("method block_{id}_{:#08x}(st': EvmState.ExecutingState) returns (st'': EvmState.State)", pc);
+    println!("method block_{id}_{:#06x}(st': EvmState.ExecutingState) returns (st'': EvmState.State)", pc);
     println!("requires st'.evm.code == Code.Create(BYTECODE_{id});");
-    println!("requires st'.WritesPermitted() && st'.PC() == {pc:#02x}");
+    println!("requires st'.WritesPermitted() && st'.PC() == {pc:#06x}");
     // Limit stack height
     if min == max {
         println!("requires st'.Operands() == {max}");
-    } else {
+    } else if min < max {
         println!("requires {min} <= st'.Operands() <= {max}");
     }
     // Figure out concrete stack values
-    for i in 0..min {
-        match extract_stack_values(i,pc,analysis) {
-            Some(items) => {
-                print!("requires ");
-                for j in 0..items.len() {
-                    if j != 0 { print!(" || "); }
-                    print!("(st'.Peek({i}) == {:#x})",items[j]);
+    if min <= max {
+        for i in 0..min {
+            match extract_stack_values(i,pc,analysis) {
+                Some(items) => {
+                    print!("requires ");
+                    for j in 0..items.len() {
+                        if j != 0 { print!(" || "); }
+                        print!("(st'.Peek({i}) == {:#x})",items[j]);
+                    }
+                    println!();
                 }
-                println!();
+                None => { }
             }
-            None => { }
         }
+    } else {
+        // NOTE: min > max suggests unreachable code.  Therefore, put
+        // in place something to check this is actually true.
+        println!("requires false;");
     }
     println!("{{");
     println!("\tvar st := st';");
@@ -441,7 +464,9 @@ fn print_instruction(pc: usize, insn: &Instruction, analysis: &ExecutionSection<
             println!("\tst := Dup(st,{});", n);
         }
         JUMP|JUMPI => {
-            println!("\tassume st.IsJumpDest({:#x});",branch_target(pc,insn,analysis));
+            for target in branch_targets(pc,insn,analysis) {
+                println!("\tassume st.IsJumpDest({target:#x});");
+            }
             println!("\tst := {}(st);", to_dfy_name(&insn));            
         }
         RJUMP(offset) => {
@@ -491,7 +516,7 @@ fn extract_stack_values(i: usize, pc: usize, analysis: &ExecutionSection<LegacyE
 }    
 
 // Determine the target of this branch
-fn branch_target(mut pc: usize, insn: &Instruction, analysis: &ExecutionSection<LegacyEvmState>) -> usize {
+fn branch_targets(mut pc: usize, insn: &Instruction, analysis: &ExecutionSection<LegacyEvmState>) -> Vec<usize> {    
     match insn {
         RJUMP(offset)|RJUMPI(offset) => {
             // Push pc to past this instruction
@@ -499,18 +524,16 @@ fn branch_target(mut pc: usize, insn: &Instruction, analysis: &ExecutionSection<
             // Compute absolute target based on pc value of following
             // instruction.
             let target = (pc as isize) + (*offset as isize);
-            target as usize
+            vec![target as usize]
         }
 	JUMP|JUMPI => {
-	    let mut targets = Vec::new();
+	    let mut targets : Vec<usize> = Vec::new();
 	    for s in analysis[pc].iter() {
-		targets.push(s.stack().peek(0).constant());
+                let target = s.stack().peek(0).constant();
+		targets.push(target.into());
 	    }
-            // For now, I'm just going to assume this is true.  In
-            // situations where we have call/return ... it definitely
-            // will not be.
-	    assert_eq!(targets.len(),1);
-	    targets[0].into()
+	    targets.dedup();
+            targets
 	}
         _ => {
             unreachable!()
@@ -526,8 +549,8 @@ fn branch_target(mut pc: usize, insn: &Instruction, analysis: &ExecutionSection<
 //     //
 //     println!("}}");
 //     println!();
-//     println!("method block_{:#08x}(st': ValidState) returns (st'': EvmState.State)", pc);
-//     println!("requires st'.PC() == {:#08x}", pc);
+//     println!("method block_{:#06x}(st': ValidState) returns (st'': EvmState.State)", pc);
+//     println!("requires st'.PC() == {:#06x}", pc);
 //     if stack_height.is_constant() {
 //         println!("requires st'.Operands() == {}", stack_height.unwrap());
 //     } else {
@@ -542,10 +565,10 @@ fn branch_target(mut pc: usize, insn: &Instruction, analysis: &ExecutionSection<
 //         //
 //         if !ith.is_top() {
 //             if ith.is_constant() {
-//                 println!("requires st'.Peek({}) == {:#08x}", i, ith.constant());
+//                 println!("requires st'.Peek({}) == {:#06x}", i, ith.constant());
 //             } else {
 //                 println!(
-//                     "requires st'.Peek({}) >= {:#08x} && st'.Peek({}) <= {:#08x}",
+//                     "requires st'.Peek({}) >= {:#06x} && st'.Peek({}) <= {:#06x}",
 //                     i, ith.start, i, ith.end
 //                 );
 //             }
