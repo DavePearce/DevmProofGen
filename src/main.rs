@@ -511,6 +511,8 @@ fn extract_stack_values(i: usize, pc: usize, analysis: &ExecutionSection<LegacyE
         }
             
     }
+    // Remove duplicates!
+    values.dedup();
     //
     Some(values)
 }    
