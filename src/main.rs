@@ -404,22 +404,28 @@ fn print_block_header(id: usize, pc: usize, analysis: &ExecutionSection<LegacyEv
     // Limit stack height
     if min == max {
         println!("requires st'.Operands() == {max}");
-    } else {
+    } else if min < max {
         println!("requires {min} <= st'.Operands() <= {max}");
     }
     // Figure out concrete stack values
-    for i in 0..min {
-        match extract_stack_values(i,pc,analysis) {
-            Some(items) => {
-                print!("requires ");
-                for j in 0..items.len() {
-                    if j != 0 { print!(" || "); }
-                    print!("(st'.Peek({i}) == {:#x})",items[j]);
+    if min <= max {
+        for i in 0..min {
+            match extract_stack_values(i,pc,analysis) {
+                Some(items) => {
+                    print!("requires ");
+                    for j in 0..items.len() {
+                        if j != 0 { print!(" || "); }
+                        print!("(st'.Peek({i}) == {:#x})",items[j]);
+                    }
+                    println!();
                 }
-                println!();
+                None => { }
             }
-            None => { }
         }
+    } else {
+        // NOTE: min > max suggests unreachable code.  Therefore, put
+        // in place something to check this is actually true.
+        println!("requires false;");
     }
     println!("{{");
     println!("\tvar st := st';");
