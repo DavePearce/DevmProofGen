@@ -1,4 +1,4 @@
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command};
 use evmil::evm::legacy;
 use evmil::evm::legacy::{LegacyEvmState};
 use evmil::evm::{AssemblyInstruction, Bytecode, Execution, ExecutionSection, EvmState, EvmStack, Instruction, Section};
@@ -297,7 +297,7 @@ const BASIC_BLOCKS: bool = false;
 
 type PreconditionFn = fn(&Instruction);
 
-fn gen_proof(bytes: &[u8], preconditions: PreconditionFn) {
+fn gen_proof(bytes: &[u8], preconditions: PreconditionFn, blocksize: u16) {
     print_preamble(&bytes);    
     // Disassemble bytes into instructions
     // Construct bytecode representation
@@ -313,7 +313,7 @@ fn gen_proof(bytes: &[u8], preconditions: PreconditionFn) {
         match s {
             Section::Code(insns) => {
 		let analysis = &execution[id];
-                print_code_section(id, insns, analysis, preconditions)
+                print_code_section(id, insns, analysis, preconditions, blocksize)
             }
             Section::Data(bytes) => {
                 // For now.
@@ -324,9 +324,10 @@ fn gen_proof(bytes: &[u8], preconditions: PreconditionFn) {
     }
 }
 
-fn print_code_section(id: usize, instructions: &[Instruction], analysis: &ExecutionSection<LegacyEvmState>, preconditions: PreconditionFn) {
+fn print_code_section(id: usize, instructions: &[Instruction], analysis: &ExecutionSection<LegacyEvmState>, preconditions: PreconditionFn, blocksize: u16) {
     let mut pc = 0;
     let mut block = false;
+    let mut size = 0;
     // Print out the bytecode (only for legacy contracts?)
     print_code_bytecode(id,instructions);
     //
@@ -347,13 +348,16 @@ fn print_code_section(id: usize, instructions: &[Instruction], analysis: &Execut
         if !block {
             print_block_header(id,pc,analysis);
             block = true;
+            size = blocksize;
         }
         // Check any preconditions
         preconditions(insn);
         // Print out the instruction
         print_instruction(pc,insn,analysis);
+        // Monitor size of current block
+        size -= 1;
         // Manage control-flow
-        if !insn.fallthru() {           
+        if size == 0 || !insn.fallthru() {           
             if insn.can_branch() {
                 // Unconditional branch
                 let targets = branch_targets(pc,insn,analysis);
@@ -367,6 +371,9 @@ fn print_code_section(id: usize, instructions: &[Instruction], analysis: &Execut
                     }
                     println!("\t}}");
                 }
+            } else if size == 0 {
+                let target = pc+insn.length();
+                println!("\tst := block_{id}_{:#06x}(st);", target);                
             }
             // Block terminator
             println!("\treturn st;");
@@ -609,14 +616,20 @@ fn main() {
         .about("DafnyEvm Proof Generation Tool")
         .arg(Arg::new("args"))
         .arg(Arg::new("overflow").long("overflows"))
+        .arg(Arg::new("blocksize")
+             .long("blocksize")
+             .value_name("SIZE")
+             .value_parser(clap::value_parser!(u16))
+             .default_value("65535"))
         .get_matches();
     // Extract arguments
     let overflows = matches.is_present("overflow");
+    let blocksize : &u16 = matches.get_one("blocksize").unwrap();
     let args: Vec<_> = matches.get_many::<String>("args").unwrap().collect();
     // Done
     for arg in args {
         // Parse hex string into bytes
         let bytes = arg.from_hex_string().unwrap();
-        gen_proof(&bytes, overflow_checks);
+        gen_proof(&bytes, overflow_checks, *blocksize);
     }
 }
