@@ -1,8 +1,8 @@
 use clap::{Arg, ArgAction, Command};
-use evmil::evm::legacy;
-use evmil::evm::legacy::{LegacyEvmState};
-use evmil::evm::{AssemblyInstruction, Bytecode, Execution, ExecutionSection, EvmState, EvmStack, Instruction, Section};
-use evmil::evm::AbstractInstruction::*;
+use evmil::analysis::{EvmState, EvmStack};
+use evmil::analysis::{aw256,ConcreteStack,ConcreteState,trace,UnknownMemory,UnknownStorage};
+use evmil::bytecode::{Assembly, Disassemble, Instruction, StructuredSection};
+use evmil::bytecode::Instruction::*;
 use evmil::util::{FromHexString,ToHexString,Concretizable};
 
 pub static OPCODES: &'static [&'static str] = &[
@@ -286,7 +286,7 @@ fn print_preamble(bytes: &[u8]) {
 
 fn to_dfy_name(insn: &Instruction) -> String {
     // Determine opcode
-    let opcode = insn.opcode().unwrap();
+    let opcode = insn.opcode();
     //
     OPCODES[opcode as usize].to_string()
 }
@@ -297,41 +297,41 @@ const BASIC_BLOCKS: bool = false;
 
 type PreconditionFn = fn(&Instruction);
 
+// Package up a suitable state for the analysis
+type State = ConcreteState<ConcreteStack<aw256>,UnknownMemory<aw256>,UnknownStorage<aw256>>;
+
 fn gen_proof(bytes: &[u8], preconditions: PreconditionFn, blocksize: u16) {
     print_preamble(&bytes);    
     // Disassemble bytes into instructions
-    // Construct bytecode representation
-    let asm = legacy::from_bytes(&bytes);
-    let bytecode = asm.assemble().unwrap();
-    // Compute analysis results
-    let mut execution : Execution<LegacyEvmState> = Execution::new(&bytecode);
-    // Run execution (and for now hope it succeeds!)
-    execution.execute(LegacyEvmState::new());    
-    //
+    let contract = Assembly::from_legacy_bytes(bytes);
     let mut id = 0;
-    for s in &bytecode {  
+    for s in &contract {
         match s {
-            Section::Code(insns) => {
-		let analysis = &execution[id];
-                print_code_section(id, insns, analysis, preconditions, blocksize)
+            StructuredSection::Code(insns) => {
+                // Compute analysis results
+                let init : State = State::new();
+                // Run the abstract trace
+                let states : Vec<Vec<State>> = trace(&insns,init);
+                // Print out the code
+                print_code_section(id, insns, &states, preconditions, blocksize)
             }
-            Section::Data(bytes) => {
+            StructuredSection::Data(bytes) => {
                 // For now.
-                println!("// {}",bytes.to_hex_string());                         
+                println!("// {}",bytes.to_hex_string());
             }
         }
         id = id + 1;
     }
 }
 
-fn print_code_section(id: usize, instructions: &[Instruction], analysis: &ExecutionSection<LegacyEvmState>, preconditions: PreconditionFn, blocksize: u16) {
+fn print_code_section(id: usize, instructions: &[Instruction], analysis: &[Vec<State>], preconditions: PreconditionFn, blocksize: u16) {
     let mut pc = 0;
     let mut block = false;
     let mut size = 0;
     // Print out the bytecode (only for legacy contracts?)
     print_code_bytecode(id,instructions);
     //
-    for insn in instructions {
+    for (index,insn) in instructions.iter().enumerate() {
         // Manage jump dests
         if block && insn == &Instruction::JUMPDEST {
             // Jumpdest detected.  Therefore, we need to break the
@@ -346,21 +346,21 @@ fn print_code_section(id: usize, instructions: &[Instruction], analysis: &Execut
         // If we are not currently within a block, then print out the
         // block header.        
         if !block {
-            print_block_header(id,pc,analysis);
+            print_block_header(id,index,pc,analysis);
             block = true;
             size = blocksize;
         }
         // Check any preconditions
         preconditions(insn);
         // Print out the instruction
-        print_instruction(pc,insn,analysis);
+        print_instruction(index,insn,analysis);
         // Monitor size of current block
         size -= 1;
         // Manage control-flow
         if size == 0 || !insn.fallthru() {           
             if insn.can_branch() {
                 // Unconditional branch
-                let targets = branch_targets(pc,insn,analysis);
+                let targets = branch_targets(index,insn,analysis);
                 //
                 if targets.len() == 1 {
                     println!("\tst := block_{id}_{:#06x}(st);", targets[0]);
@@ -382,7 +382,7 @@ fn print_code_section(id: usize, instructions: &[Instruction], analysis: &Execut
             block = false;
         } else if insn.can_branch() {
             // Conditional branch
-            let targets = branch_targets(pc,insn,analysis);
+            let targets = branch_targets(index,insn,analysis);
             if targets.len() == 1 {
                 let target = targets[0];
                 println!("\tif st.PC() == {target:#x} {{ st := block_{id}_{target:#06x}(st); return st; }}");                
@@ -403,8 +403,10 @@ fn print_code_section(id: usize, instructions: &[Instruction], analysis: &Execut
 fn print_code_bytecode(id: usize, insns: &[Instruction]) {
     // Convert instructions into bytes
     let mut bytes = Vec::new();
+    let mut pc = 0;
     for b in insns {
-        b.encode(&mut bytes).unwrap();
+        b.encode(pc,&mut bytes);
+        pc += b.length();
     }
     //
     print!("const BYTECODE_{id} : seq<u8> := [");
@@ -418,9 +420,9 @@ fn print_code_bytecode(id: usize, insns: &[Instruction]) {
     println!();
 }    
 
-fn print_block_header(id: usize, pc: usize, analysis: &ExecutionSection<LegacyEvmState>) {
+fn print_block_header(id: usize, index: usize, pc: usize, analysis: &[Vec<State>]) {
     // First compute upper and lower bounds on the stack height.
-    let (min,max) = determine_stack_size(pc,analysis);
+    let (min,max) = determine_stack_size(index,analysis);
     //    
     println!("method block_{id}_{:#06x}(st': EvmState.ExecutingState) returns (st'': EvmState.State)", pc);
     println!("requires st'.evm.code == Code.Create(BYTECODE_{id});");
@@ -434,7 +436,7 @@ fn print_block_header(id: usize, pc: usize, analysis: &ExecutionSection<LegacyEv
     // Figure out concrete stack values
     if min <= max {
         for i in 0..min {
-            match extract_stack_values(i,pc,analysis) {
+            match extract_stack_values(i,index,analysis) {
                 Some(items) => {
                     print!("requires ");
                     for j in 0..items.len() {
@@ -455,7 +457,7 @@ fn print_block_header(id: usize, pc: usize, analysis: &ExecutionSection<LegacyEv
     println!("\tvar st := st';");
 }
 
-fn print_instruction(pc: usize, insn: &Instruction, analysis: &ExecutionSection<LegacyEvmState>) {
+fn print_instruction(index: usize, insn: &Instruction, analysis: &[Vec<State>]) {
     match insn {
         DATA(bytes) => {
             println!("\t// {}", bytes.to_hex_string());
@@ -471,7 +473,7 @@ fn print_instruction(pc: usize, insn: &Instruction, analysis: &ExecutionSection<
             println!("\tst := Dup(st,{});", n);
         }
         JUMP|JUMPI => {
-            for target in branch_targets(pc,insn,analysis) {
+            for target in branch_targets(index,insn,analysis) {
                 println!("\tassume st.IsJumpDest({target:#x});");
             }
             println!("\tst := {}(st);", to_dfy_name(&insn));            
@@ -491,11 +493,11 @@ fn print_instruction(pc: usize, insn: &Instruction, analysis: &ExecutionSection<
     }
 }
 
-fn determine_stack_size(pc: usize, analysis: &ExecutionSection<LegacyEvmState>) -> (usize,usize) {
+fn determine_stack_size(index: usize, analysis: &[Vec<State>]) -> (usize,usize) {
     let mut min = usize::MAX;
     let mut max = 0;
     // 
-    for s in analysis[pc].iter() {    
+    for s in analysis[index].iter() {    
         min = min.min(s.stack().size());
         max = max.max(s.stack().size());        
     }
@@ -503,10 +505,10 @@ fn determine_stack_size(pc: usize, analysis: &ExecutionSection<LegacyEvmState>) 
     (min,max)
 }    
 
-fn extract_stack_values(i: usize, pc: usize, analysis: &ExecutionSection<LegacyEvmState>) -> Option<Vec<usize>> {
+fn extract_stack_values(i: usize, index: usize, analysis: &[Vec<State>]) -> Option<Vec<usize>> {
     let mut values = Vec::new();
     // 
-    for s in analysis[pc].iter() {    
+    for s in analysis[index].iter() {    
         let v = s.stack().peek(i);
         if v.is_constant() {
             // FIXME: unsafe for large w256 values.
@@ -525,7 +527,7 @@ fn extract_stack_values(i: usize, pc: usize, analysis: &ExecutionSection<LegacyE
 }    
 
 // Determine the target of this branch
-fn branch_targets(mut pc: usize, insn: &Instruction, analysis: &ExecutionSection<LegacyEvmState>) -> Vec<usize> {    
+fn branch_targets(mut pc: usize, insn: &Instruction, analysis: &[Vec<State>]) -> Vec<usize> {    
     match insn {
         RJUMP(offset)|RJUMPI(offset) => {
             // Push pc to past this instruction
