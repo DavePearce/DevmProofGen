@@ -1,9 +1,9 @@
 use clap::{Arg, ArgAction, Command};
 use evmil::analysis::{EvmState, EvmStack};
-use evmil::analysis::{aw256,ConcreteStack,ConcreteState,trace,UnknownMemory,UnknownStorage};
+use evmil::analysis::{aw256,ConcreteStack,ConcreteState,EvmMemory,insert_havocs,trace,ConcreteMemory,UnknownStorage};
 use evmil::bytecode::{Assembly, Disassemble, Instruction, StructuredSection};
 use evmil::bytecode::Instruction::*;
-use evmil::util::{FromHexString,ToHexString,Concretizable};
+use evmil::util::{FromHexString,ToHexString,Concretizable,w256};
 
 pub static OPCODES: &'static [&'static str] = &[
     "Stop",           //             0x00
@@ -298,12 +298,15 @@ const BASIC_BLOCKS: bool = false;
 type PreconditionFn = fn(&Instruction);
 
 // Package up a suitable state for the analysis
-type State = ConcreteState<ConcreteStack<aw256>,UnknownMemory<aw256>,UnknownStorage<aw256>>;
+type State = ConcreteState<ConcreteStack<aw256>,ConcreteMemory<aw256>,UnknownStorage<aw256>>;
 
 fn gen_proof(bytes: &[u8], preconditions: PreconditionFn, blocksize: u16) {
     print_preamble(&bytes);    
     // Disassemble bytes into instructions
-    let contract = Assembly::from_legacy_bytes(bytes);
+    let mut contract = Assembly::from_legacy_bytes(bytes);
+    // Infer havoc instructions
+    contract = infer_havoc_insns(contract);
+    //
     let mut id = 0;
     for s in &contract {
         match s {
@@ -322,6 +325,21 @@ fn gen_proof(bytes: &[u8], preconditions: PreconditionFn, blocksize: u16) {
         }
         id = id + 1;
     }
+}
+
+fn infer_havoc_insns(mut asm: Assembly) -> Assembly {
+    // This could probably be more efficient :)
+    let sections = asm.iter_mut().map(|section| {
+        match section {
+            StructuredSection::Code(ref mut insns) => {    
+                let ninsns = insert_havocs(insns.clone());
+	        StructuredSection::Code(ninsns)
+            }
+            _ => section.clone()
+        }
+    }).collect();
+    // 
+    Assembly::new(sections)
 }
 
 fn print_code_section(id: usize, instructions: &[Instruction], analysis: &[Vec<State>], preconditions: PreconditionFn, blocksize: u16) {
@@ -433,20 +451,40 @@ fn print_block_header(id: usize, index: usize, pc: usize, analysis: &[Vec<State>
     } else if min < max {
         println!("requires {min} <= st'.Operands() <= {max}");
     }
-    // Figure out concrete stack values
     if min <= max {
+        // Figure out concrete stack values        
         for i in 0..min {
             match extract_stack_values(i,index,analysis) {
                 Some(items) => {
                     print!("requires ");
                     for j in 0..items.len() {
                         if j != 0 { print!(" || "); }
-                        print!("(st'.Peek({i}) == {:#x})",items[j]);
+                        let jth = items[j];
+                        // NOTE: following is a hack to work around
+                        // hex display problems with w256.
+                        if jth.byte_len() <= 16 {
+                            let jth128 : u128 = items[j].to();
+                            print!("(st'.Peek({i}) == {:#02x})",jth128);
+                        } else {
+                            print!("(st'.Peek({i}) == {:#02x})",items[j]);
+                        }
                     }
                     println!();
                 }
                 None => { }
             }
+        }
+        // Support free_memory pointer
+        match extract_free_mem_pointer(index,analysis) {
+            Some(items) => {
+                print!("requires Memory.Size(st'.evm.memory) >= 0x60 && (");
+                for j in 0..items.len() {
+                    if j != 0 { print!(" || "); }
+                    print!("st'.Read(0x40) == {:#x}",items[j]);
+                }
+                println!(")");
+            }
+            None => {}
         }
     } else {
         // NOTE: min > max suggests unreachable code.  Therefore, put
@@ -487,6 +525,9 @@ fn print_instruction(index: usize, insn: &Instruction, analysis: &[Vec<State>]) 
         SWAP(n) => {
             println!("\tst := Swap(st,{});", n);
         }
+        HAVOC(n) => {
+            println!("\t// havoc {n}");
+        }
         _ => {
             println!("\tst := {}(st);", to_dfy_name(&insn));
         }
@@ -505,14 +546,14 @@ fn determine_stack_size(index: usize, analysis: &[Vec<State>]) -> (usize,usize) 
     (min,max)
 }    
 
-fn extract_stack_values(i: usize, index: usize, analysis: &[Vec<State>]) -> Option<Vec<usize>> {
+fn extract_stack_values(i: usize, index: usize, analysis: &[Vec<State>]) -> Option<Vec<w256>> {
     let mut values = Vec::new();
     // 
     for s in analysis[index].iter() {    
         let v = s.stack().peek(i);
         if v.is_constant() {
             // FIXME: unsafe for large w256 values.
-            values.push(v.constant().into());
+            values.push(v.constant());
         } else {
             // In this case, we have any unknown value so we cannot
             // conclude anything useful.
@@ -525,6 +566,31 @@ fn extract_stack_values(i: usize, index: usize, analysis: &[Vec<State>]) -> Opti
     //
     Some(values)
 }    
+
+fn extract_free_mem_pointer(index: usize, analysis: &[Vec<State>]) -> Option<Vec<usize>> {
+    let fmp = aw256::from(w256::from(0x40));
+    let mut values = Vec::new();
+    //
+    for s in analysis[index].iter() {
+        // NOTE: this is a hack to work around the lack of an
+        // immutable peek option for memory.
+        let mut mem = s.memory().clone();
+        // Read free memory pointer        
+        let v = mem.read(fmp);
+        // Check if known value
+        if v.is_constant() {
+            values.push(v.constant().to());
+        } else {
+            // In this case, we have any unknown value so we cannot
+            // conclude anything useful.
+            return None;
+        }        
+    }
+    // Remove duplicates!
+    values.dedup();    
+    //
+    Some(values)    
+}
 
 // Determine the target of this branch
 fn branch_targets(mut pc: usize, insn: &Instruction, analysis: &[Vec<State>]) -> Vec<usize> {    
@@ -541,7 +607,7 @@ fn branch_targets(mut pc: usize, insn: &Instruction, analysis: &[Vec<State>]) ->
 	    let mut targets : Vec<usize> = Vec::new();
 	    for s in analysis[pc].iter() {
                 let target = s.stack().peek(0).constant();
-		targets.push(target.into());
+		targets.push(target.to());
 	    }
 	    targets.dedup();
             targets
