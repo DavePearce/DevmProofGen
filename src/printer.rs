@@ -6,6 +6,28 @@ use crate::analysis::*;
 use crate::opcodes::{OPCODES};
 use crate::PreconditionFn;
 
+
+pub fn print_preamble(bytes: &[u8]) {
+    println!("include \"evm-dafny/src/dafny/evm.dfy\"");
+    println!("include \"evm-dafny/src/dafny/evms/berlin.dfy\"");
+    println!("import opened Int");
+    println!("import opened Opcode");
+    println!("import opened Memory");
+    println!("import opened Bytecode");
+    println!();
+    println!("method external_call(sender: u160, st: EvmState.ExecutingState) returns (r:EvmState.TerminatedState)");
+    println!("ensures r.RETURNS? ==> r.world.Exists(sender) {{");
+    println!("\t return EvmState.ERROR(EvmState.INSUFFICIENT_GAS); // dummy");
+    println!("}}");
+    println!();
+    // println!("method main(context: Context.T, world: map<u160,WorldState.Account>, gas: nat) returns (st': EvmState.State)");
+    // println!("requires context.writePermission");
+    // println!("requires gas > 100000");
+    // println!("requires context.address in world {{");
+    // println!("\tvar st := EvmBerlin.Create(context,world,gas,BYTECODE);");
+}
+
+
 pub fn print_code_section(id: usize, instructions: &[Instruction], analysis: &[Vec<State>], preconditions: PreconditionFn, blocksize: u16) {
     let mut pc = 0;
     let mut block = false;

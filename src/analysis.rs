@@ -3,6 +3,50 @@ use evmil::analysis::{aw256,ConcreteStack,ConcreteState,EvmMemory,trace,Concrete
 use evmil::bytecode::Instruction;
 use evmil::bytecode::Instruction::*;
 use evmil::util::{Concretizable,w256};
+use crate::block::StackFrame;
+
+/// Abstracts the key information generated from an abstract
+/// interpretation of an instruction sequence.
+pub struct BytecodeAnalysis {
+    /// Stores information for each instruction.  Observe that this
+    /// maps _byte offsets_ to analysis results (i.e. not _instruction
+    /// offsets_).
+    states: Vec<Vec<State>>
+}
+
+impl BytecodeAnalysis {
+    /// Perform the bytecode analysis on a given sequence of
+    /// instructions.
+    pub fn from_insns(insns: &[Instruction]) -> Self {
+        // Compute analysis results
+        let init : State = State::new();
+        // Run the abstract trace
+        let states : Vec<Vec<State>> = trace(&insns,init);
+        //
+        todo!()
+    }
+
+    /// Get the set of stack frames for a given instruction within the
+    /// original sequence (i.e. an _instruction offset_ rather than a
+    /// _byte offset_).
+    pub fn get_stack_frames(&self, index: usize) -> Vec<StackFrame> {
+        todo!()
+    }
+
+    /// Get the set of free memory pointer positions for a given
+    /// instruction within the original sequence (i.e. an _instruction
+    /// offset_ rather than a _byte offset_).  Observe that, if the
+    /// result is empty, this indicates nothing is known about the
+    /// free memory pointer at this position.
+    pub fn get_freemem_ptr(&self, index: usize) -> Vec<usize> {
+        todo!()
+    }
+}
+
+
+// =============================================================================
+// Helpers
+// =============================================================================
 
 // Package up a suitable state for the analysis
 pub type State = ConcreteState<ConcreteStack<aw256>,ConcreteMemory<aw256>,UnknownStorage<aw256>>;

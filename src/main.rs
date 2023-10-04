@@ -1,4 +1,5 @@
 mod analysis;
+mod block;
 mod opcodes;
 mod printer;
 
@@ -10,30 +11,6 @@ use evmil::util::{FromHexString,ToHexString};
 
 use analysis::{State};
 use printer::*;
-
-fn print_preamble(bytes: &[u8]) {
-    println!("include \"evm-dafny/src/dafny/evm.dfy\"");
-    println!("include \"evm-dafny/src/dafny/evms/berlin.dfy\"");
-    println!("import opened Int");
-    println!("import opened Opcode");
-    println!("import opened Memory");
-    println!("import opened Bytecode");
-    println!();
-    println!("method external_call(sender: u160, st: EvmState.ExecutingState) returns (r:EvmState.TerminatedState)");
-    println!("ensures r.RETURNS? ==> r.world.Exists(sender) {{");
-    println!("\t return EvmState.ERROR(EvmState.INSUFFICIENT_GAS); // dummy");
-    println!("}}");
-    println!();
-    // println!("method main(context: Context.T, world: map<u160,WorldState.Account>, gas: nat) returns (st': EvmState.State)");
-    // println!("requires context.writePermission");
-    // println!("requires gas > 100000");
-    // println!("requires context.address in world {{");
-    // println!("\tvar st := EvmBerlin.Create(context,world,gas,BYTECODE);");
-}
-
-/// Determine whether or not to split into true basic blocks, or into
-/// larger blocks.
-const BASIC_BLOCKS: bool = false;
 
 type PreconditionFn = fn(&Instruction);
 
