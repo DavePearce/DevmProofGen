@@ -1,128 +1,210 @@
-use evmil::bytecode::{Instruction};
+use evmil::bytecode::{Assemble,Instruction};
 use evmil::bytecode::Instruction::*;
 use evmil::util::{ToHexString};
 
+use crate::block::{Bytecode,Block};
 use crate::analysis::*;
 use crate::opcodes::{OPCODES};
 use crate::PreconditionFn;
 
-
-pub fn print_preamble(bytes: &[u8]) {
-    println!("include \"evm-dafny/src/dafny/evm.dfy\"");
-    println!("include \"evm-dafny/src/dafny/evms/berlin.dfy\"");
-    println!("import opened Int");
-    println!("import opened Opcode");
-    println!("import opened Memory");
-    println!("import opened Bytecode");
-    println!();
-    println!("method external_call(sender: u160, st: EvmState.ExecutingState) returns (r:EvmState.TerminatedState)");
-    println!("ensures r.RETURNS? ==> r.world.Exists(sender) {{");
-    println!("\t return EvmState.ERROR(EvmState.INSUFFICIENT_GAS); // dummy");
-    println!("}}");
-    println!();
-    // println!("method main(context: Context.T, world: map<u160,WorldState.Account>, gas: nat) returns (st': EvmState.State)");
-    // println!("requires context.writePermission");
-    // println!("requires gas > 100000");
-    // println!("requires context.address in world {{");
-    // println!("\tvar st := EvmBerlin.Create(context,world,gas,BYTECODE);");
+pub struct DafnyPrinter {
+    id: usize,
+    out: String
 }
 
+impl DafnyPrinter {
+    pub fn new(id: usize) -> Self {
+        Self{id,out:String::new()}
+    }
+    pub fn to_string(self) -> String {
+        self.out
+    }
+    pub fn print(&mut self, s: &str) {
+        self.out.push_str(s);
+    }
+    pub fn println(&mut self, s: &str) {
+        self.out.push_str(s);
+        self.out.push_str("\n");
+    }
 
-pub fn print_code_section(id: usize, instructions: &[Instruction], analysis: &[Vec<State>], preconditions: PreconditionFn, blocksize: u16) {
-    let mut pc = 0;
-    let mut block = false;
-    let mut size = 0;
-    // Print out the bytecode (only for legacy contracts?)
-    print_code_bytecode(id,instructions);
-    //
-    for (index,insn) in instructions.iter().enumerate() {
-        // Manage jump dests
-        if block && insn == &Instruction::JUMPDEST {
-            // Jumpdest detected.  Therefore, we need to break the
-            // current block up.
-            println!("\tst := block_{id}_{:#06x}(st);",pc);
-            // Block terminator
-            println!("\treturn st;");
-            println!("}}");
-            println!("");
-            block = false;
+    /// Print the raw bytecode associated with this instruction
+    /// sequence.
+    pub fn print_bytecode(&mut self, insns: &[Instruction]) {
+        // Convert instructions into bytes
+        let mut bytes = insns.assemble();
+        //
+        self.print(&format!("const BYTECODE_{} : seq<u8> := [",self.id));
+        //
+        for i in 0..bytes.len() {
+            let ith = format!("{:#02x}", bytes[i]);
+            self.print(&ith);
+            if (i + 1) != bytes.len() {
+                self.print(", ");
+            }
         }
-        // If we are not currently within a block, then print out the
-        // block header.        
-        if !block {
-            print_block_header(id,index,pc,analysis);
-            block = true;
-            size = blocksize;
+        self.println("];");
+        self.println("");
+    }    
+    
+    pub fn print_block(&mut self, block: &Block) {
+        let sig = format!("method block_{}_{:#06x}(st': EvmState.ExecutingState) returns (st'': EvmState.State)", self.id, block.pc());        
+        self.println(&sig);
+        self.print_requires(block);
+        self.println("{");
+        self.println("\tvar st := st';");
+        for code in block.iter() {
+            self.print_code(code);
         }
-        // Check any preconditions
-        preconditions(insn);
-        // Print out the instruction
-        print_instruction(index,insn,analysis);
-        // Monitor size of current block
-        size -= 1;
-        // Manage control-flow
-        if size == 0 || !insn.fallthru() {           
-            if insn.can_branch() {
-                // Unconditional branch
-                let targets = branch_targets(index,insn,analysis);
-                //
-                if targets.len() == 1 {
-                    println!("\tst := block_{id}_{:#06x}(st);", targets[0]);
-                } else {
-                    println!("\tmatch st.PC() {{");
-                    for target in targets {
-                        println!("\t\tcase {target:#x} => {{ st := block_{id}_{target:#06x}(st); }}");
+        match block.next() {
+            Some(pc) => {
+                self.println(&format!("\treturn block_{}_{pc:#06x}(st);",self.id));
+            }
+            None => {
+                self.println("\treturn st;");
+            }
+        }
+        self.println("}");
+        self.println("");        
+    }
+
+    fn print_requires(&mut self, block: &Block) {
+        let req1 = format!("requires st'.evm.code == Code.Create(BYTECODE_{});",self.id);
+        let req2 = format!("requires st'.WritesPermitted() && st'.PC() == {:#06x}",block.pc());
+        // Standard requires
+        self.println(&req1);
+        self.println(&req2);
+        // Frames
+        self.print("requires ");
+        //
+        for (i,st) in block.states().iter().enumerate() {
+            if i != 0 {
+                self.println("");
+                self.print("\t\t || ");
+            }
+            self.print_state(st);
+        }
+        self.println("");
+    }
+
+    fn print_state(&mut self, state: &AbstractState) {
+        let stack = state.stack();
+        self.print("(");
+        // Print out stack height
+        self.print(&format!("st'.Operands() == {}",stack.len()));
+        // Print out free memory pointer (if applicable)
+        match state.freemem_ptr() {
+            Some(v) => {
+                self.print(" && Memory.Size(st'.evm.memory) >= 0x60");
+                self.print(&format!(" && st'.Read(0x40) == {v:#x}"));
+            }
+            None => {}
+        }
+        // Print out stack
+        for i in 0..stack.len() {
+            match stack[i] {
+                Some(v) => {
+                    self.print(" && ");                    
+                    // NOTE: following is a hack to work around
+                    // hex display problems with w256.
+                    if v.byte_len() <= 16 {
+                        let jth128 : u128 = v.to();
+                        self.print(&format!("st'.Peek({i}) == {:#02x}",jth128));
+                    } else {
+                        self.print(&format!("st'.Peek({i}) == {:#02x}",v));
                     }
-                    println!("\t}}");
                 }
-            } else if size == 0 {
-                let target = pc+insn.length();
-                println!("\tst := block_{id}_{:#06x}(st);", target);                
-            }
-            // Block terminator
-            println!("\treturn st;");
-            println!("}}");
-            println!("");
-            block = false;
-        } else if insn.can_branch() {
-            // Conditional branch
-            let targets = branch_targets(index,insn,analysis);
-            if targets.len() == 1 {
-                let target = targets[0];
-                println!("\tif st.PC() == {target:#x} {{ st := block_{id}_{target:#06x}(st); return st; }}");                
-            } else {
-                println!("\tmatch st.PC() {{");
-                for target in targets {
-                    println!("\t\tcase {target:#x} => {{ st := block_{id}_{target:#06x}(st); return st; }}");                
+                None => {
+                    
                 }
-                println!("\t\tcase _ => {{}}");
-                println!("\t}}");
             }
         }
-        // Move passed instruction
-        pc = pc + insn.length();
+        self.print(")");        
     }
-}
+    
+    fn print_code(&mut self, code: &Bytecode) {
+        //
+        match code {
+            Bytecode::Comment(s) => {
+                self.print("\t// ");
+                self.println(s);
+            }
+            Bytecode::Dup(n) => {
+                self.println(&format!("\tst := Dup(st,{n});"));                                     
+            }
+            Bytecode::Jump(targets) => {
+                self.print_jump(targets);
+            }
+            Bytecode::JumpI(targets) => {
+                self.print_jumpi(targets);
+            }
+            Bytecode::Push(bytes) => {
+                let n = bytes.len();
+                let hex = bytes.to_hex_string();
+                match n {
+                    1 => self.println(&format!("\tst := Push1(st,{});", hex)),
+                    2 => self.println(&format!("\tst := Push2(st,{});", hex)),
+                    3 => self.println(&format!("\tst := Push3(st,{});", hex)),
+                    4 => self.println(&format!("\tst := Push4(st,{});", hex)),
+                    _ => {
+                        self.println(&format!("\tst := PushN(st,{n},{});", hex))
+                    }                    
+                }
+            }            
+            Bytecode::Swap(n) => {
+                self.println(&format!("\tst := Swap(st,{n});"));
+            }            
+            Bytecode::Unit(_,name) => {
+                self.println(&format!("\tst := {name}(st);"));                
+            }
+            _ => {
+                self.println("\t???");
+            }
+        }
+    }
 
-fn print_code_bytecode(id: usize, insns: &[Instruction]) {
-    // Convert instructions into bytes
-    let mut bytes = Vec::new();
-    let mut pc = 0;
-    for b in insns {
-        b.encode(pc,&mut bytes);
-        pc += b.length();
-    }
-    //
-    print!("const BYTECODE_{id} : seq<u8> := [");
-    for i in 0..bytes.len() {
-        print!("{:#02x}", bytes[i]);
-        if (i + 1) != bytes.len() {
-            print!(", ");
+    fn print_jump(&mut self, targets: &[usize]) {
+        // Print out assumptions
+        self.print_jump_assumes(targets);
+        // Print out instruction
+        self.println("\tst := Jump(st);");
+        // Manage Control Flow
+        if targets.len() == 1 {
+            self.println(&format!("\tst := block_{}_{:#06x}(st);", self.id, targets[0]));
+        } else {
+            self.println("\tmatch st.PC() {{");
+            for target in targets {
+                self.println(&format!("\t\tcase {target:#x} => {{ st := block_{}_{target:#06x}(st); }}",self.id));
+            }
+            self.println("\t}}");
         }
     }
-    println!("];");
-    println!();
-}    
+
+    fn print_jumpi(&mut self, targets: &[usize]) {
+        // Print out assumptions
+        self.print_jump_assumes(targets);
+        // Print out instruction
+        self.println("\tst := JumpI(st);");
+        // Manage Control Flow
+        if targets.len() == 1 {
+            let target = targets[0];
+            let line = format!("\tif st.PC() == {target:#x} {{ return block_{}_{target:#06x}(st); }}",self.id);
+            self.println(&line);
+        } else {
+            self.println("\tmatch st.PC() {{");
+            for target in targets {
+                self.println(&format!("\t\tcase {target:#x} => {{ return block_{}_{target:#06x}(st); }}",self.id));
+            }
+            self.println("\t\tcase _ => {{}}");
+            self.println("\t}}");
+        }
+    }
+
+    fn print_jump_assumes(&mut self, targets: &[usize]) {
+        for target in targets {
+            self.println(&format!("\tassume st.IsJumpDest({target:#x});"));
+        }
+    }                
+}
 
 fn print_block_header(id: usize, index: usize, pc: usize, analysis: &[Vec<State>]) {
     // First compute upper and lower bounds on the stack height.
@@ -161,16 +243,14 @@ fn print_block_header(id: usize, index: usize, pc: usize, analysis: &[Vec<State>
             }
         }
         // Support free_memory pointer
-        match extract_free_mem_pointer(index,analysis) {
-            Some(items) => {
-                print!("requires Memory.Size(st'.evm.memory) >= 0x60 && (");
-                for j in 0..items.len() {
-                    if j != 0 { print!(" || "); }
-                    print!("st'.Read(0x40) == {:#x}",items[j]);
-                }
-                println!(")");
+        let fmp = extract_free_mem_pointer(index,analysis);
+        if fmp.len() > 0 {
+            print!("requires Memory.Size(st'.evm.memory) >= 0x60 && (");
+            for j in 0..fmp.len() {
+                if j != 0 { print!(" || "); }
+                print!("st'.Read(0x40) == {:#x}",fmp[j]);
             }
-            None => {}
+            println!(")");
         }
     } else {
         // NOTE: min > max suggests unreachable code.  Therefore, put
@@ -181,58 +261,11 @@ fn print_block_header(id: usize, index: usize, pc: usize, analysis: &[Vec<State>
     println!("\tvar st := st';");
 }
 
-fn print_instruction(index: usize, insn: &Instruction, analysis: &[Vec<State>]) {
-    match insn {
-        DATA(bytes) => {
-            println!("\t// {}", bytes.to_hex_string());
-        }
-        PUSH(bytes) => {
-            let opcode = 0x5f + bytes.len();
-            println!("\tst := {}(st,{});", OPCODES[opcode], bytes.to_hex_string());
-        }
-        CALL => {
-            print_call();
-        }
-        DUP(n) => {
-            println!("\tst := Dup(st,{});", n);
-        }
-        JUMP|JUMPI => {
-            for target in branch_targets(index,insn,analysis) {
-                println!("\tassume st.IsJumpDest({target:#x});");
-            }
-            println!("\tst := {}(st);", to_dfy_name(&insn));            
-        }
-        RJUMP(offset) => {
-            println!("\tst := RJump(st,{offset:#x});");
-        }
-        RJUMPI(offset) => {
-            println!("\tst := RJumpI(st,{offset:#x});");
-        }
-        SWAP(n) => {
-            println!("\tst := Swap(st,{});", n);
-        }
-        HAVOC(n) => {
-            println!("\t// havoc {n}");
-        }
-        _ => {
-            println!("\tst := {}(st);", to_dfy_name(&insn));
-        }
-    }
-}
-
-fn to_dfy_name(insn: &Instruction) -> String {
-    // Determine opcode
-    let opcode = insn.opcode();
-    //
-    OPCODES[opcode as usize].to_string()
-}
-
-
-fn print_call() {
-    println!("\tvar CONTINUING(cc) := Call(st);");
-    println!("\t{{");
-    println!("\t\tvar inner := cc.CallEnter(1);");
-    println!("\t\tif inner.EXECUTING? {{ inner := external_call(cc.sender,inner); }}");
-    println!("\t\tst := cc.CallReturn(inner);");
-    println!("\t}}");
-}
+// fn print_call() {
+//     println!("\tvar CONTINUING(cc) := Call(st);");
+//     println!("\t{{");
+//     println!("\t\tvar inner := cc.CallEnter(1);");
+//     println!("\t\tif inner.EXECUTING? {{ inner := external_call(cc.sender,inner); }}");
+//     println!("\t\tst := cc.CallReturn(inner);");
+//     println!("\t}}");
+// }

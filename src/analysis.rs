@@ -3,7 +3,64 @@ use evmil::analysis::{aw256,ConcreteStack,ConcreteState,EvmMemory,trace,Concrete
 use evmil::bytecode::Instruction;
 use evmil::bytecode::Instruction::*;
 use evmil::util::{Concretizable,w256};
-use crate::block::StackFrame;
+
+// =============================================================================
+// Abstract State
+// =============================================================================
+
+/// An abstract representation of the EVM at a given point in time.
+/// This includes information known about the stack at this point,
+/// along with the free memory pointer.
+#[derive(Clone,Debug,PartialEq)]
+pub struct AbstractState {
+    // Set of free memory pointers on entry.  If this is empty, then
+    // the contents of the free memory pointer is unknown.    
+    freemem_ptr: Option<usize>,
+    // Set of stack frames on entry.  No information is known about
+    // entries marked `None`
+    stack_frame: Vec<Option<w256>>    
+}
+
+impl AbstractState {
+    fn new(state: &State) -> Self {
+        let freemem_ptr = Self::extract_fmp(state);
+        let stack_frame = Self::extract_stack_frame(state);
+        Self{freemem_ptr,stack_frame}
+    }
+    pub fn freemem_ptr(&self) -> Option<usize> {
+        self.freemem_ptr
+    }
+    pub fn stack(&self) -> &[Option<w256>] {
+        &self.stack_frame            
+    }
+    fn extract_fmp(state: &State) -> Option<usize> {
+        let fmp = aw256::from(w256::from(0x40));
+        // NOTE: this is a hack to work around the lack of an
+        // immutable peek option for memory.
+        let mut mem = state.memory().clone();        
+        // Read free memory pointer        
+        Self::from_aw256(&mem.read(fmp)).map(|s| s.to())
+    }
+    fn extract_stack_frame(state: &State) -> Vec<Option<w256>> {
+        let stack = state.stack();
+        let mut nstack = Vec::new();
+        for i in 0..stack.size() {
+            nstack.push(Self::from_aw256(stack.peek(i)));
+        }
+        nstack
+    }
+    /// Convert abstract word into required format.  This should be
+    /// deprecated in the future, when `Into<Option<w256>>` is
+    /// implemented for `aw256`.
+    fn from_aw256(v: &aw256) -> Option<w256> {
+        if v.is_constant() { Some(v.constant().to())
+        } else { None }
+    }
+}
+
+// =============================================================================
+// Bytecode Analysis
+// =============================================================================
 
 /// Abstracts the key information generated from an abstract
 /// interpretation of an instruction sequence.
@@ -11,35 +68,32 @@ pub struct BytecodeAnalysis {
     /// Stores information for each instruction.  Observe that this
     /// maps _byte offsets_ to analysis results (i.e. not _instruction
     /// offsets_).
-    states: Vec<Vec<State>>
+    states: Vec<Vec<AbstractState>>
 }
 
 impl BytecodeAnalysis {
     /// Perform the bytecode analysis on a given sequence of
     /// instructions.
     pub fn from_insns(insns: &[Instruction]) -> Self {
+        let mut states = Vec::new();        
         // Compute analysis results
         let init : State = State::new();
         // Run the abstract trace
-        let states : Vec<Vec<State>> = trace(&insns,init);
+        let trace : Vec<Vec<State>> = trace(&insns,init);
+        // Convert into abstract states
+        for t in trace {
+            let s = t.iter().map(|s| AbstractState::new(s)).collect();
+            states.push(s);
+        }
         //
-        todo!()
+        Self{states}        
     }
 
-    /// Get the set of stack frames for a given instruction within the
-    /// original sequence (i.e. an _instruction offset_ rather than a
-    /// _byte offset_).
-    pub fn get_stack_frames(&self, index: usize) -> Vec<StackFrame> {
-        todo!()
-    }
-
-    /// Get the set of free memory pointer positions for a given
-    /// instruction within the original sequence (i.e. an _instruction
-    /// offset_ rather than a _byte offset_).  Observe that, if the
-    /// result is empty, this indicates nothing is known about the
-    /// free memory pointer at this position.
-    pub fn get_freemem_ptr(&self, index: usize) -> Vec<usize> {
-        todo!()
+    /// Get the set of abstract states at a given instruction within
+    /// the original sequence (i.e. an _instruction offset_ rather
+    /// than a _byte offset_).
+    pub fn get_states(&self, index: usize) -> &[AbstractState] {
+        &self.states[index]
     }
 }
 
@@ -84,7 +138,7 @@ pub fn extract_stack_values(i: usize, index: usize, analysis: &[Vec<State>]) -> 
     Some(values)
 }    
 
-pub fn extract_free_mem_pointer(index: usize, analysis: &[Vec<State>]) -> Option<Vec<usize>> {
+pub fn extract_free_mem_pointer(index: usize, analysis: &[Vec<State>]) -> Vec<usize> {
     let fmp = aw256::from(w256::from(0x40));
     let mut values = Vec::new();
     //
@@ -100,13 +154,13 @@ pub fn extract_free_mem_pointer(index: usize, analysis: &[Vec<State>]) -> Option
         } else {
             // In this case, we have any unknown value so we cannot
             // conclude anything useful.
-            return None;
+            return Vec::new();
         }        
     }
     // Remove duplicates!
     values.dedup();    
     //
-    Some(values)    
+    values
 }
 
 // Determine the target of this branch
