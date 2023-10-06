@@ -134,6 +134,7 @@ pub fn extract_stack_values(i: usize, index: usize, analysis: &[Vec<State>]) -> 
             
     }
     // Remove duplicates!
+    values.sort_unstable();    
     values.dedup();
     //
     Some(values)
@@ -159,6 +160,7 @@ pub fn extract_free_mem_pointer(index: usize, analysis: &[Vec<State>]) -> Vec<us
         }        
     }
     // Remove duplicates!
+    values.sort_unstable();
     values.dedup();    
     //
     values
@@ -181,6 +183,7 @@ pub fn branch_targets(mut pc: usize, insn: &Instruction, analysis: &[Vec<State>]
                 let target = s.stack().peek(0).constant();
 		targets.push(target.to());
 	    }
+            targets.sort_unstable();
 	    targets.dedup();
             targets
 	}

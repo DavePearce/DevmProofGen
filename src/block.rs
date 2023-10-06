@@ -190,7 +190,7 @@ fn insns_to_block(mut n: usize, mut pc: usize, index: usize, insns: &[Instructio
 /// state.  That is, the set of possible values on top of the stack in
 /// the given state.
 fn jump_targets(states: &[AbstractState]) -> Vec<usize> {
-    let mut targets = Vec::new();
+    let mut targets :Vec<usize> = Vec::new();
     for s in states {
         // NOTE: this will fail if the branch target is unknown.  For
         // now, I just assume this can never happen.  However, in
@@ -198,6 +198,7 @@ fn jump_targets(states: &[AbstractState]) -> Vec<usize> {
         // jump target is loaded out of memory or storage).
         targets.push(s.stack()[0].unwrap().to());
     }
+    targets.sort_unstable();
     targets.dedup();
     targets
 }
