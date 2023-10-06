@@ -57,7 +57,7 @@ impl DafnyPrinter {
         }
         match block.next() {
             Some(pc) => {
-                self.println(&format!("\treturn block_{}_{pc:#06x}(st);",self.id));
+                self.println(&format!("\tst := block_{}_{pc:#06x}(st); return st;",self.id));
             }
             None => {
                 self.println("\treturn st;");
@@ -73,37 +73,68 @@ impl DafnyPrinter {
         // Standard requires
         self.println(&req1);
         self.println(&req2);
-        // Frames
-        self.print("requires ");
-        //
-        for (i,st) in block.states().iter().enumerate() {
-            if i != 0 {
-                self.println("");
-                self.print("\t\t || ");
+        self.print_fmp_requires(block);
+        self.print_stack_requires(block);
+    }
+
+    fn print_fmp_requires(&mut self, block: &Block) {
+        // Constants to help
+        let fmps = block.freemem_ptrs();
+        // Generic free ptr bounds
+        match fmps {
+            Some((v,w)) => {
+                if v >= 0x60 {
+                    self.print("requires Memory.Size(st'.evm.memory) >= 0x60 && ");                
+                    if v == w {
+                        self.println(&format!("st'.Read(0x40) == {:#02x}",v));
+                    } else {
+                        self.println(&format!("st'.Read(0x40) >= {:#02x}",v));
+                    }
+                }
             }
-            self.print_state(st);
+            _ => {}
+        }        
+    }
+    
+    fn print_stack_requires(&mut self, block: &Block) {
+        let (min,max) = block.stack_heights();        
+        // Generic stack bounds
+        if min == max {
+            self.println(&format!("requires st'.Operands() == {}",min));
+        } else {
+            self.println(&format!("requires st'.Operands() >= {} && st'.Operands() <= {}",min,max));
+        }        
+        // Decompose states
+        let stacked = stacked_states(block.states(),max+1);
+        //
+        for (sh,sts) in stacked.iter().enumerate() {
+            if min <= sh && is_useful(&sts) {
+                self.print("requires ");
+                if min != max { self.print(&format!("st'.Operands() == {sh} ==> (")); }
+                for (i,st) in sts.iter().enumerate() {
+                    if i != 0 {
+                        self.println("");
+                        self.print("\t || ");
+                    }
+                    self.print_state(st);
+                }
+                if min != max { self.print(")"); }
+                self.println("");
+            }            
         }
-        self.println("");
     }
 
     fn print_state(&mut self, state: &AbstractState) {
         let stack = state.stack();
         self.print("(");
-        // Print out stack height
-        self.print(&format!("st'.Operands() == {}",stack.len()));
-        // Print out free memory pointer (if applicable)
-        match state.freemem_ptr() {
-            Some(v) => {
-                self.print(" && Memory.Size(st'.evm.memory) >= 0x60");
-                self.print(&format!(" && st'.Read(0x40) == {v:#x}"));
-            }
-            None => {}
-        }
         // Print out stack
+        let mut first = true;
         for i in 0..stack.len() {
             match stack[i] {
                 Some(v) => {
-                    self.print(" && ");                    
+                    if !first {
+                        self.print(" && ");
+                    }
                     // NOTE: following is a hack to work around
                     // hex display problems with w256.
                     if v.byte_len() <= 16 {
@@ -112,6 +143,7 @@ impl DafnyPrinter {
                     } else {
                         self.print(&format!("st'.Peek({i}) == {:#02x}",v));
                     }
+                    first = false;                    
                 }
                 None => {
                     
@@ -157,7 +189,7 @@ impl DafnyPrinter {
                 self.println(&format!("\tst := {name}(st);"));                
             }
             _ => {
-                self.println("\t???");
+                self.println("\t// ???");
             }
         }
     }
@@ -171,11 +203,11 @@ impl DafnyPrinter {
         if targets.len() == 1 {
             self.println(&format!("\tst := block_{}_{:#06x}(st);", self.id, targets[0]));
         } else {
-            self.println("\tmatch st.PC() {{");
+            self.println("\tmatch st.PC() {");
             for target in targets {
                 self.println(&format!("\t\tcase {target:#x} => {{ st := block_{}_{target:#06x}(st); }}",self.id));
             }
-            self.println("\t}}");
+            self.println("\t}");
         }
     }
 
@@ -187,15 +219,15 @@ impl DafnyPrinter {
         // Manage Control Flow
         if targets.len() == 1 {
             let target = targets[0];
-            let line = format!("\tif st.PC() == {target:#x} {{ return block_{}_{target:#06x}(st); }}",self.id);
+            let line = format!("\tif st.PC() == {target:#x} {{ st := block_{}_{target:#06x}(st); return st;}}",self.id);
             self.println(&line);
         } else {
-            self.println("\tmatch st.PC() {{");
+            self.println("\tmatch st.PC() {");
             for target in targets {
-                self.println(&format!("\t\tcase {target:#x} => {{ return block_{}_{target:#06x}(st); }}",self.id));
+                self.println(&format!("\t\tcase {target:#x} => {{ st := block_{}_{target:#06x}(st); return st;}}",self.id));
             }
             self.println("\t\tcase _ => {{}}");
-            self.println("\t}}");
+            self.println("\t}");
         }
     }
 
@@ -260,6 +292,40 @@ fn print_block_header(id: usize, index: usize, pc: usize, analysis: &[Vec<State>
     println!("{{");
     println!("\tvar st := st';");
 }
+
+fn stacked_states(states: &[AbstractState], n:usize) -> Vec<Vec<&AbstractState>> {
+    let mut stack = vec![Vec::new(); n];
+    for s in states {
+        let sh = s.stack().len();
+        stack[sh].push(s);
+    }
+    stack
+}
+
+/// Check no state in a given set of states offers no value.  That is
+/// where we no *nothing* about the stack in the case.
+fn is_useful(states: &[&AbstractState]) -> bool {
+    if states.len() == 0 { return false; }
+    for st in states {
+        if !has_value(st) { return false; }
+    }
+    true
+}
+
+/// Check whether we know something useful about the stack in this
+/// state.  A stack is useful if it contains at least one known value.
+fn has_value(st: &AbstractState) -> bool {
+    let stack = st.stack();
+    let mut count = 0;
+    for i in 0..stack.len() {
+        match stack[i] {
+            Some(_) => { count += 1; }
+            None => {}
+        }
+    }
+    count > 0
+}
+
 
 // fn print_call() {
 //     println!("\tvar CONTINUING(cc) := Call(st);");

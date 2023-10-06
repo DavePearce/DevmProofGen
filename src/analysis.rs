@@ -82,7 +82,8 @@ impl BytecodeAnalysis {
         let trace : Vec<Vec<State>> = trace(&insns,init);
         // Convert into abstract states
         for t in trace {
-            let s = t.iter().map(|s| AbstractState::new(s)).collect();
+            let mut s:Vec<_> = t.iter().map(|s| AbstractState::new(s)).collect();
+            s.dedup();
             states.push(s);
         }
         //

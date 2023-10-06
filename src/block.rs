@@ -32,12 +32,39 @@ pub struct Block {
 impl Block {
     pub fn pc(&self) -> usize {
         self.pc
-    }
+    }    
     pub fn states(&self) -> &[AbstractState] {
         &self.states
     }
     pub fn bytecodes(&self) -> &[Bytecode] {
         &self.bytecodes
+    }
+    pub fn stack_heights(&self) -> (usize,usize) {
+        let mut min = usize::MAX;
+        let mut max = 0;
+        // 
+        for s in &self.states {    
+            min = min.min(s.stack().len());
+            max = max.max(s.stack().len());        
+        }
+        //
+        (min,max)        
+    }
+    pub fn freemem_ptrs(&self) -> Option<(usize,usize)> {
+        let mut min = usize::MAX;
+        let mut max = 0;
+        // 
+        for s in &self.states {
+            match s.freemem_ptr() {
+                Some(p) => {
+                    min = min.min(p);
+                    max = max.max(p);
+                }
+                None => { return None; }
+            }
+        }
+        //
+        Some((min,max))
     }
     pub fn next(&self) -> Option<usize> { self.next }
     pub fn iter(&self) -> std::slice::Iter<Bytecode> {
@@ -53,8 +80,8 @@ pub struct BlockSequence {
 
 impl BlockSequence {
     /// Construct a block sequence from a given instruction sequence.
-    pub fn from_insns(insns: &[Instruction]) -> Self {
-        let blocks = insns_to_blocks(insns);
+    pub fn from_insns(n: usize, insns: &[Instruction]) -> Self {
+        let blocks = insns_to_blocks(n, insns);
         Self{blocks}
     }
 
@@ -71,7 +98,7 @@ impl BlockSequence {
 /// This employs an abstract interpretation to determine various key
 /// pieces of information (e.g. jump targets, stack values, etc) at
 /// each point.
-fn insns_to_blocks(insns: &[Instruction]) -> Vec<Block> {
+fn insns_to_blocks(n: usize, insns: &[Instruction]) -> Vec<Block> {
     // Compute suplementary information needed for remainder.
     let analysis = BytecodeAnalysis::from_insns(insns);
     // Initially empty set of blocks.
@@ -81,10 +108,10 @@ fn insns_to_blocks(insns: &[Instruction]) -> Vec<Block> {
     // Byte offset of current instruction.
     let mut pc = 0;
     // Process blocks one by one until all sequence is exhausted.
-    while index < insns.len() {
+    while n > 0 && index < insns.len() {
         let block : Block;
         // Process next block
-        (pc,index,block) = insns_to_block(pc,index,insns,&analysis);
+        (pc,index,block) = insns_to_block(n,pc,index,insns,&analysis);
         // Store processed block
         blocks.push(block);
     }
@@ -94,7 +121,7 @@ fn insns_to_blocks(insns: &[Instruction]) -> Vec<Block> {
 
 /// Extract the next block starting at a given byte offset (and
 /// instruction offset) within the original sequence.
-fn insns_to_block(mut pc: usize, index: usize, insns: &[Instruction], analysis: &BytecodeAnalysis) -> (usize,usize,Block) {
+fn insns_to_block(mut n: usize, mut pc: usize, index: usize, insns: &[Instruction], analysis: &BytecodeAnalysis) -> (usize,usize,Block) {
     let mut i = index;    
     // Extract abstract states at this position.
     let states = analysis.get_states(i).to_vec();
@@ -103,7 +130,7 @@ fn insns_to_block(mut pc: usize, index: usize, insns: &[Instruction], analysis: 
     // Flag to signal early exit
     let mut done = false;
     // Travese block to its end
-    while !done && i < insns.len() {
+    while !done && i < insns.len() && n > 0 {
         let insn = &insns[i];
         // Convert bytecode
         let bc = match insn {
@@ -153,6 +180,7 @@ fn insns_to_block(mut pc: usize, index: usize, insns: &[Instruction], analysis: 
         block.bytecodes.push(bc);
         pc += insn.length();
         i += 1;
+        n -= 1;
     }
     // Done
     (pc,i,block)
@@ -170,5 +198,6 @@ fn jump_targets(states: &[AbstractState]) -> Vec<usize> {
         // jump target is loaded out of memory or storage).
         targets.push(s.stack()[0].unwrap().to());
     }
+    targets.dedup();
     targets
 }

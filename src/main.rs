@@ -15,7 +15,7 @@ use printer::*;
 
 type PreconditionFn = fn(&Instruction);
 
-fn gen_proof(bytes: &[u8], preconditions: PreconditionFn, blocksize: u16) {
+fn gen_proof(bytes: &[u8], preconditions: PreconditionFn, blocksize: usize) {
     // Print necessary dafny preamble
     print_preamble(bytes);    
     // Disassemble bytes into instructions
@@ -32,7 +32,7 @@ fn gen_proof(bytes: &[u8], preconditions: PreconditionFn, blocksize: u16) {
                 // Print raw bytecode
                 printer.print_bytecode(insns);
                 // Build initial block sequence
-                let blocks = BlockSequence::from_insns(insns);                
+                let blocks = BlockSequence::from_insns(blocksize,insns);                
                 //
                 for blk in blocks.iter() {
                     printer.print_block(blk);
@@ -73,10 +73,11 @@ fn infer_havoc_insns(mut asm: Assembly) -> Assembly {
 pub fn print_preamble(bytes: &[u8]) {
     println!("include \"evm-dafny/src/dafny/evm.dfy\"");
     println!("include \"evm-dafny/src/dafny/evms/berlin.dfy\"");
-    println!("import opened Int");
     println!("import opened Opcode");
     println!("import opened Memory");
     println!("import opened Bytecode");
+    println!("type u8 = Int.u8");
+    println!("type u160 = Int.u160");
     println!();
     println!("method external_call(sender: u160, st: EvmState.ExecutingState) returns (r:EvmState.TerminatedState)");
     println!("ensures r.RETURNS? ==> r.world.Exists(sender) {{");
@@ -108,12 +109,12 @@ fn main() {
         .arg(Arg::new("blocksize")
              .long("blocksize")
              .value_name("SIZE")
-             .value_parser(clap::value_parser!(u16))
+             .value_parser(clap::value_parser!(usize))
              .default_value("65535"))
         .get_matches();
     // Extract arguments
     let overflows = matches.is_present("overflow");
-    let blocksize : &u16 = matches.get_one("blocksize").unwrap();
+    let blocksize : &usize = matches.get_one("blocksize").unwrap();
     let args: Vec<_> = matches.get_many::<String>("args").unwrap().collect();
     // Done
     for arg in args {
