@@ -132,49 +132,29 @@ fn insns_to_block(mut n: usize, mut pc: usize, index: usize, insns: &[Instructio
     // Travese block to its end
     while !done && i < insns.len() && n > 0 {
         let insn = &insns[i];
-        // Convert bytecode
-        let bc = match insn {
-            DUP(n) => Bytecode::Dup(*n),
-            HAVOC(n) => {
-                // Virtual instructions
-                Bytecode::Comment(format!("Havoc {n}"))
-            }
+        let mut bc : Bytecode;        
+        // Insert debug information
+        add_debug_info(&mut block,analysis.get_states(i));
+        // Convert bytecode                
+        match insn {
             JUMPDEST => {
+                // Jumpdest handled specially
                 if i == index {
                     // A jumddest is only allowed as the first
                     // instruction of a block.  This is because we
                     // cannot jump into the middle of a Dafny
                     // method!
                     let name = &OPCODES[insn.opcode() as usize];
-                    Bytecode::Unit(false,name)
+                    bc = Bytecode::Unit(false,name);
                 } else {
                     // Indicates split is necessary.
                     block.next = Some(pc);
                     break;
                 }
-            }
-            JUMPI => {
-                // Extract branch targets
-                let targets = jump_targets(analysis.get_states(i));
-                // 
-                Bytecode::JumpI(targets)
-            }
-            JUMP => {
-                // Extract branch targets
-                let targets = jump_targets(analysis.get_states(i));
-                // Terminating instruction
-                done = true;
-                // 
-                Bytecode::Jump(targets)                    
-            }
-            LOG(n) =>  Bytecode::Log(*n),            
-            PUSH(bytes) => { Bytecode::Push(bytes.clone()) }
-            RJUMPI(_)|RJUMP(_) => { todo!() }
-            SWAP(n) =>  Bytecode::Swap(*n),      
+            }            
             _ => {
-                let name = &OPCODES[insn.opcode() as usize];
-                done = !insn.fallthru();
-                Bytecode::Unit(!insn.fallthru(),name)
+                // Translate any other kind of instruction
+                (bc,done) = translate_insn(insn,done,analysis.get_states(i));
             }
         };
         block.bytecodes.push(bc);
@@ -184,6 +164,47 @@ fn insns_to_block(mut n: usize, mut pc: usize, index: usize, insns: &[Instructio
     }
     // Done
     (pc,i,block)
+}
+
+fn add_debug_info(block: &mut Block, states: &[AbstractState]) {
+    for s in states {
+        let bc = Bytecode::Comment(format!("{}",s));
+        block.bytecodes.push(bc);
+    }
+}
+
+fn translate_insn(insn: &Instruction, mut done: bool, states: &[AbstractState]) -> (Bytecode,bool) {
+    let bc = match insn {    
+        DUP(n) => Bytecode::Dup(*n),
+        HAVOC(n) => {
+            // Virtual instructions
+            Bytecode::Comment(format!("Havoc {n}"))
+        }
+        JUMPI => {
+            // Extract branch targets
+            let targets = jump_targets(states);
+            // 
+            Bytecode::JumpI(targets)
+        }
+        JUMP => {
+            // Extract branch targets
+            let targets = jump_targets(states);
+            // Terminating instruction
+            done = true;
+            // 
+            Bytecode::Jump(targets)                    
+        }
+        LOG(n) =>  Bytecode::Log(*n),            
+        PUSH(bytes) => { Bytecode::Push(bytes.clone()) }
+        RJUMPI(_)|RJUMP(_) => { todo!() }
+        SWAP(n) =>  Bytecode::Swap(*n),      
+        _ => {
+            let name = &OPCODES[insn.opcode() as usize];
+            done = !insn.fallthru();
+            Bytecode::Unit(!insn.fallthru(),name)
+        }
+    };
+    (bc,done)
 }
 
 /// Extract the set of possible jump targets from a given abstract
