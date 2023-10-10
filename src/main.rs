@@ -3,6 +3,8 @@ mod block;
 mod opcodes;
 mod printer;
 
+use std::fs;
+use std::error::Error;
 use clap::{Arg, Command};
 use evmil::analysis::{insert_havocs,trace};
 use evmil::bytecode::{Assemble, Assembly, Instruction, StructuredSection};
@@ -12,6 +14,33 @@ use evmil::util::{FromHexString,ToHexString};
 use analysis::{State};
 use block::{BlockSequence};
 use printer::*;
+
+
+fn main() -> Result<(), Box<dyn Error>> {
+    //let args: Vec<String> = env::args().collect();
+    let matches = Command::new("devmpg")
+        .about("DafnyEvm Proof Generation Tool")
+        .arg(Arg::new("overflow").long("overflows"))
+        .arg(Arg::new("blocksize")
+             .long("blocksize")
+             .value_name("SIZE")
+             .value_parser(clap::value_parser!(usize))
+             .default_value("65535"))
+        .arg(Arg::new("target").required(true))        
+        .get_matches();
+    // Extract arguments
+    let overflows = matches.is_present("overflow");
+    let blocksize : &usize = matches.get_one("blocksize").unwrap();
+    let target = matches.get_one::<String>("target").unwrap();
+    // Read from asm file
+    let bytes = fs::read(target)?;    
+    // Generate the proof
+    gen_proof(&bytes, overflow_checks, *blocksize);
+    // Done
+    Ok(())
+}
+
+// ===================================================================
 
 type PreconditionFn = fn(&Instruction);
 
@@ -97,29 +126,4 @@ fn overflow_checks(insn: &Instruction) {
             // do nothing
         }
     }    
-}
-
-// This is a hack script for now.
-fn main() {
-    //let args: Vec<String> = env::args().collect();
-    let matches = Command::new("devmpg")
-        .about("DafnyEvm Proof Generation Tool")
-        .arg(Arg::new("args"))
-        .arg(Arg::new("overflow").long("overflows"))
-        .arg(Arg::new("blocksize")
-             .long("blocksize")
-             .value_name("SIZE")
-             .value_parser(clap::value_parser!(usize))
-             .default_value("65535"))
-        .get_matches();
-    // Extract arguments
-    let overflows = matches.is_present("overflow");
-    let blocksize : &usize = matches.get_one("blocksize").unwrap();
-    let args: Vec<_> = matches.get_many::<String>("args").unwrap().collect();
-    // Done
-    for arg in args {
-        // Parse hex string into bytes
-        let bytes = arg.from_hex_string().unwrap();
-        gen_proof(&bytes, overflow_checks, *blocksize);
-    }
 }
