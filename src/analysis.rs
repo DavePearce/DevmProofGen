@@ -1,3 +1,4 @@
+use std::fmt;
 use evmil::analysis::{EvmState, EvmStack};
 use evmil::analysis::{aw256,ConcreteStack,ConcreteState,EvmMemory,trace,ConcreteMemory,UnknownStorage};
 use evmil::bytecode::Instruction;
@@ -56,6 +57,45 @@ impl AbstractState {
         if v.is_constant() { Some(v.constant().to())
         } else { None }
     }
+}
+
+impl fmt::Display for AbstractState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f,"|")?;                
+        // Write freemem ptr
+        match self.freemem_ptr {
+            Some(w) => { write!(f,"fp={w:#06x}"); }
+            None => {}
+        }       
+        write!(f,"|")?;
+        // Write stack
+        for (i,av) in self.stack_frame.iter().enumerate() {
+            if i != 0 { write!(f,",")?; }
+            match av {
+                Some(w) => { write_w256(f,w)?; }
+                None => {write!(f,"_")?;}
+            }
+        }
+        write!(f,"|")?;        
+        Ok(())
+    }        
+}
+
+fn write_w256(f: &mut fmt::Formatter, w:&w256) -> fmt::Result {
+    let mut first = true;
+    write!(f,"0x")?;
+    // Following is necessary because ruint::Uint doesn't
+    // appear to play nicely with formatting hexadecimal.                
+    for l in w.as_limbs().iter().rev() {
+        if *l != 0 || !first {
+            write!(f,"{l:02x}")?;
+            first = false;
+        }
+    }
+    if first {
+        write!(f,"00")?;
+    }
+    Ok(())
 }
 
 // =============================================================================
