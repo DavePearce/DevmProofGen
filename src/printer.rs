@@ -163,6 +163,9 @@ impl DafnyPrinter {
             Bytecode::Dup(n) => {
                 self.println(&format!("\tst := Dup(st,{n});"));                                     
             }
+            Bytecode::Log(n) => {
+                self.println(&format!("\tst := LogN(st,{n});"));                                     
+            }            
             Bytecode::Jump(targets) => {
                 self.print_jump(targets);
             }
@@ -187,9 +190,6 @@ impl DafnyPrinter {
             }            
             Bytecode::Unit(_,name) => {
                 self.println(&format!("\tst := {name}(st);"));                
-            }
-            _ => {
-                self.println("\t// ???");
             }
         }
     }

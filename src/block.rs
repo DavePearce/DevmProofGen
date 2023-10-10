@@ -4,6 +4,7 @@ use evmil::util::w256;
 use crate::analysis::{BytecodeAnalysis,AbstractState};
 use crate::opcodes::OPCODES;
 
+#[derive(Debug)]
 pub enum Bytecode {
     Comment(String),
     Unit(bool,&'static str),
