@@ -4,7 +4,7 @@ use evmil::util::w256;
 use crate::analysis::{BytecodeAnalysis,AbstractState};
 use crate::opcodes::OPCODES;
 
-#[derive(Debug)]
+#[derive(Clone,Debug)]
 pub enum Bytecode {
     Comment(String),
     Unit(bool,&'static str),
@@ -19,6 +19,7 @@ pub enum Bytecode {
 /// Represents a basic block within a given sequence of instructions.
 /// All relevant information for generating the proof object is
 /// included.
+#[derive(Clone)]
 pub struct Block {
     // The starting PC for this block
     pc: usize,
@@ -75,6 +76,7 @@ impl Block {
 
 /// Represents a sequence of basic blocks which are ordered in some
 /// particular way.
+#[derive(Clone)]
 pub struct BlockSequence {
     blocks: Vec<Block>
 }
@@ -88,6 +90,10 @@ impl BlockSequence {
 
     pub fn iter(&self) -> std::slice::Iter<Block> {
         self.blocks.iter()
+    }
+
+    pub fn to_vec(self) -> Vec<Block> {
+        self.blocks
     }
 }
 
