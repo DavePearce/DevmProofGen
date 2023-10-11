@@ -68,7 +68,7 @@ impl DafnyPrinter {
     }
 
     fn print_requires(&mut self, block: &Block) {
-        let req1 = format!("requires st'.evm.code == Code.Create(BYTECODE_{});",self.id);
+        let req1 = format!("requires st'.evm.code == Code.Create(BYTECODE_{})",self.id);
         let req2 = format!("requires st'.WritesPermitted() && st'.PC() == {:#06x}",block.pc());
         // Standard requires
         self.println(&req1);

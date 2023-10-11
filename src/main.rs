@@ -4,6 +4,8 @@ mod opcodes;
 mod printer;
 
 use std::fs;
+use std::fs::File;
+use std::io::{BufWriter,Write};
 use std::collections::HashMap;
 use std::error::Error;
 use clap::{Arg, Command};
@@ -112,10 +114,23 @@ fn split(roots: &HashMap<(usize,usize),String>, id: usize, blocks: &BlockSequenc
 
 /// Convert each block group into a sequence of one or more files
 /// using a given prefix.
-fn write_groups(prefix: &str, groups: Vec<BlockGroup>) {
+fn write_groups(prefix: &str, groups: Vec<BlockGroup>) -> Result<(), Box<dyn Error>> {
     for g in groups {
         let filename = format!("{prefix}_{}_{}.dfy",g.id,g.name);
+        let header = format!("{prefix}_{}_header.dfy",g.id);        
         println!("Writing {filename}");
+        let mut f = BufWriter::new(File::create(filename)?);
+        writeln!(f,"include \"../evm-dafny/src/dafny/evm.dfy\"");
+        writeln!(f,"include \"../evm-dafny/src/dafny/core/code.dfy\"");        
+        writeln!(f,"include \"{header}\"");                
+        writeln!(f,"");
+        writeln!(f,"module {} {{",g.name);
+        writeln!(f,"\timport opened Opcode");
+        writeln!(f,"\timport opened Code");
+        writeln!(f,"\timport opened Memory");
+        writeln!(f,"\timport opened Bytecode");
+        writeln!(f,"\timport opened Header");        
+        writeln!(f,"");                
         // Construct block printer
         let mut printer = DafnyPrinter::new(g.id);
         //
@@ -123,31 +138,52 @@ fn write_groups(prefix: &str, groups: Vec<BlockGroup>) {
             printer.print_block(&blk);
         }
         // Write the file
-        fs::write(filename,printer.to_string());
+        write!(f,"{}",printer.to_string());
+        writeln!(f,"}}");
     }
+    Ok(())
 }
-
-fn write_headers(prefix: &str, contract: &Assembly) {
+ 
+/// Write out header files for all bytecode sections.
+fn write_headers(prefix: &str, contract: &Assembly) -> Result<(), Box<dyn Error>> {
     for (i,s) in contract.iter().enumerate() {
         match s {
             StructuredSection::Code(insns) => {
                 let filename = format!("{prefix}_{}_header.dfy",i);
-                println!("Writing {filename}");        
-                // Construct block printer
-                let mut printer = DafnyPrinter::new(i);
-                // Print bytecode
-                printer.print_bytecode(insns);
-                // Write file
-                fs::write(filename,printer.to_string());        
+                println!("Writing {filename}");
+                let mut f = BufWriter::new(File::create(filename)?);
+                writeln!(f,"include \"../evm-dafny/src/dafny/evm.dfy\"")?;
+                writeln!(f,"")?;
+                writeln!(f,"module Header {{")?;
+                writeln!(f,"\timport opened Int");
+                writeln!(f,"");                
+                write_bytecode(&mut f, insns, i);
+                writeln!(f,"}}")?;
             }
             StructuredSection::Data(bytes) => {
                 // Nothing (for now)
             }
         }
-    }    
+    }
+    Ok(())
 }
 
-
+/// Write out the contract bytecode as an array of bytes.
+fn write_bytecode<T:Write>(f: &mut T, insns: &[Instruction], id: usize) {
+    // Convert instructions into bytes
+    let mut bytes = insns.assemble();   
+    //
+    write!(f,"\tconst BYTECODE_{id} : seq<u8> := [");
+    //
+    for i in 0..bytes.len() {
+        if i%8 == 0 { write!(f,"\n\t\t"); }
+        write!(f,"{:#02x}", bytes[i]);
+        if (i + 1) != bytes.len() {
+            write!(f,", ");
+        }
+    }
+    writeln!(f,"\n\t];");
+}
 
 // ===================================================================
 
