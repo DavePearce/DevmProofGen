@@ -37,12 +37,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let blocksize : &usize = matches.get_one("blocksize").unwrap();
     let target = matches.get_one::<String>("target").unwrap();
     // Read from asm file
-    let bytes = fs::read(target)?;    
-    // Generate the proof
-    gen_proof(&bytes, overflow_checks, *blocksize);
-    // ===============================================================
-    // New style
-    // ===============================================================
+    let hex = fs::read_to_string(target)?;    
+    let bytes = hex.from_hex_string()?;
+    // Setup configuration
     let mut roots = HashMap::new();
     let prefix = default_prefix(target);
     roots.insert((0,0),"main".to_string());
@@ -132,13 +129,9 @@ fn write_groups(prefix: &str, groups: Vec<BlockGroup>) -> Result<(), Box<dyn Err
         writeln!(f,"\timport opened Header");        
         writeln!(f,"");                
         // Construct block printer
-        let mut printer = DafnyPrinter::new(g.id);
+        let mut printer = BlockPrinter::new(g.id,&mut f);
         //
-        for blk in g.blocks {
-            printer.print_block(&blk);
-        }
-        // Write the file
-        write!(f,"{}",printer.to_string());
+        for blk in g.blocks { printer.print_block(&blk); }
         writeln!(f,"}}");
     }
     Ok(())
@@ -169,7 +162,7 @@ fn write_headers(prefix: &str, contract: &Assembly) -> Result<(), Box<dyn Error>
 }
 
 /// Write out the contract bytecode as an array of bytes.
-fn write_bytecode<T:Write>(f: &mut T, insns: &[Instruction], id: usize) {
+fn write_bytecode<T:Write>(mut f: T, insns: &[Instruction], id: usize) {
     // Convert instructions into bytes
     let mut bytes = insns.assemble();   
     //
@@ -182,46 +175,13 @@ fn write_bytecode<T:Write>(f: &mut T, insns: &[Instruction], id: usize) {
             write!(f,", ");
         }
     }
-    writeln!(f,"\n\t];");
+    writeln!(f,"\n\t]");
 }
 
 // ===================================================================
 
 type PreconditionFn = fn(&Instruction);
 
-fn gen_proof(bytes: &[u8], preconditions: PreconditionFn, blocksize: usize) {
-    // Print necessary dafny preamble
-    print_preamble(bytes);    
-    // Disassemble bytes into instructions
-    let mut contract = Assembly::from_legacy_bytes(bytes);
-    // Infer havoc instructions
-    contract = infer_havoc_insns(contract);
-    //
-    let mut id = 0;
-    for s in &contract {
-        match s {
-            StructuredSection::Code(insns) => {
-                // Construct block printer
-                let mut printer = DafnyPrinter::new(id);
-                // Print raw bytecode
-                printer.print_bytecode(insns);
-                // Build initial block sequence
-                let blocks = BlockSequence::from_insns(blocksize,insns);                
-                //
-                for blk in blocks.iter() {
-                    printer.print_block(blk);
-                }
-                //
-                println!("{}",printer.to_string());
-            }
-            StructuredSection::Data(bytes) => {
-                // For now.
-                println!("// {}",bytes.to_hex_string());
-            }
-        }
-        id = id + 1;
-    }
-}
 
 fn infer_havoc_insns(mut asm: Assembly) -> Assembly {
     // This could probably be more efficient :)
@@ -236,22 +196,6 @@ fn infer_havoc_insns(mut asm: Assembly) -> Assembly {
     }).collect();
     // 
     Assembly::new(sections)
-}
-
-pub fn print_preamble(bytes: &[u8]) {
-    println!("include \"evm-dafny/src/dafny/evm.dfy\"");
-    println!("include \"evm-dafny/src/dafny/evms/berlin.dfy\"");
-    println!("import opened Opcode");
-    println!("import opened Memory");
-    println!("import opened Bytecode");
-    println!("type u8 = Int.u8");
-    println!("type u160 = Int.u160");
-    println!();
-    println!("method external_call(sender: u160, st: EvmState.ExecutingState) returns (r:EvmState.TerminatedState)");
-    println!("ensures r.RETURNS? ==> r.world.Exists(sender) {{");
-    println!("\t return EvmState.ERROR(EvmState.INSUFFICIENT_GAS); // dummy");
-    println!("}}");
-    println!();
 }
 
 /// Add assertions to check against overflow / underflow in generated
