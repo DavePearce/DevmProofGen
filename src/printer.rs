@@ -90,7 +90,9 @@ impl<T:Write> BlockPrinter<T> {
                 }
                 if min != max { write!(self.out,")"); }
                 writeln!(self.out,"");
-            } 
+            } else if min <= sh && sts.len() == 0 {
+                writeln!(self.out,"\trequires st'.Operands() != {sh}");                
+            }
         }
     }
 
