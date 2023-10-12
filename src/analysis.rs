@@ -1,3 +1,4 @@
+use std::cmp;
 use std::fmt;
 use evmil::analysis::{EvmState, EvmStack};
 use evmil::analysis::{aw256,ConcreteStack,ConcreteState,EvmMemory,trace,ConcreteMemory,UnknownStorage};
@@ -50,12 +51,52 @@ impl AbstractState {
         }
         nstack
     }
+    /// Join this state with another.  Observe that this produces an
+    /// approximate state.
+    pub fn join(&mut self, other: &AbstractState) {
+        // Join freemem pointer
+        Self::join_word(&mut self.freemem_ptr,&other.freemem_ptr);
+        //
+        self.join_stack(&other.stack_frame);
+    }
+    /// Remove what is known from one stack.
+    pub fn cancel(&mut self, other: &AbstractState) {
+        let n = other.stack_frame.len();
+        for i in 0..n {
+            if self.stack_frame[i] != None && other.stack_frame[i] != None {
+                // cancel
+                self.stack_frame[i] = None;
+            }
+        }
+    }
     /// Convert abstract word into required format.  This should be
     /// deprecated in the future, when `Into<Option<w256>>` is
     /// implemented for `aw256`.
     fn from_aw256(v: &aw256) -> Option<w256> {
         if v.is_constant() { Some(v.constant().to())
         } else { None }
+    }
+    fn join_stack(&mut self, stack: &[Option<w256>]) {
+        // Determine height of resulting stack
+        let n = cmp::min(self.stack_frame.len(),stack.len());
+        // Resize to that length
+        self.stack_frame.truncate(n);
+        // Join individual items
+        for i in 0..n {
+            Self::join_word(&mut self.stack_frame[i],&stack[i]);
+        }
+        // Done
+    }
+    fn join_word<T:PartialEq>(lhs: &mut Option<T>, rhs: &Option<T>) {
+        match (&lhs,&rhs) {
+            (Some(v),Some(w)) if v == w => {
+                // do nothing in this case
+            }
+            (_,_) => {
+                // reset lhs
+                *lhs = None;
+            }
+        };
     }
 }
 

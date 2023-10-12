@@ -54,6 +54,7 @@ impl<T:Write> BlockPrinter<T> {
         match fmps {
             Some((v,w)) => {
                 if v >= 0x60 {
+                    writeln!(self.out,"\t// free memory pointer");                    
                     write!(self.out,"\trequires Memory.Size(st'.evm.memory) >= 0x60 && ");                
                     if v == w {
                         writeln!(self.out,"st'.Read(0x40) == {:#02x}",v);
@@ -69,16 +70,28 @@ impl<T:Write> BlockPrinter<T> {
     fn print_stack_requires(&mut self, block: &Block) {
         let (min,max) = block.stack_heights();        
         // Generic stack bounds
+        writeln!(self.out,"\t// stack height(s)");
         if min == max {
             writeln!(self.out,"\trequires st'.Operands() == {min}");
         } else {
             writeln!(self.out,"\trequires st'.Operands() >= {min} && st'.Operands() <= {max}");
         }        
-        // Decompose states
-        let stacked = stacked_states(block.states(),max+1);
+        // Determine constant items
+        let join = join_states(block.states());
+        // Print static items
+        self.print_static_stack_requires(&join);
+        // Print dynamic items
+        self.print_dynamic_stack_requires(block,&join);
+    }
+
+    fn print_dynamic_stack_requires(&mut self, block: &Block, join: &AbstractState) {
+        let (min,max) = block.stack_heights();                
+        // Decompose states        
+        let stacked = stacked_states(block.states(),join,max+1);        
         //
         for (sh,sts) in stacked.iter().enumerate() {
             if min <= sh && is_useful(&sts) {
+                if min == sh { writeln!(self.out,"\t// dynamic stack items"); }                
                 write!(self.out,"\trequires ");
                 if min != max { write!(self.out,"st'.Operands() == {sh} ==> ("); }
                 for (i,st) in sts.iter().enumerate() {
@@ -95,6 +108,19 @@ impl<T:Write> BlockPrinter<T> {
             }
         }
     }
+
+    /// Print all static 
+    fn print_static_stack_requires(&mut self, join: &AbstractState) {
+        // Check whether at least one static stack item.
+        let atleast_one = join.stack().iter().fold(false,|a,e| a || matches!(e,Some(_)));
+        //
+        if atleast_one {
+            writeln!(self.out,"\t// static stack items");
+            write!(self.out,"\trequires ");
+            self.print_state(join);
+            writeln!(self.out);
+        }
+    }        
 
     fn print_state(&mut self, state: &AbstractState) {
         let stack = state.stack();
@@ -221,18 +247,32 @@ impl<T:Write> BlockPrinter<T> {
     
 }
 
-fn stacked_states(states: &[AbstractState], n:usize) -> Vec<Vec<&AbstractState>> {
+/// Determine items which are constant across all stack states.
+fn join_states(states: &[AbstractState]) -> AbstractState {
+    let mut r = states[0].clone();
+    //
+    for i in 1..states.len() {
+        r.join(&states[i]);
+    }
+    //
+    r
+}
+
+fn stacked_states(states: &[AbstractState], join: &AbstractState, n:usize) -> Vec<Vec<AbstractState>> {
     let mut stack = vec![Vec::new(); n];
     for s in states {
         let sh = s.stack().len();
-        stack[sh].push(s);
+        let mut ns = s.clone();
+        assert!(ns.stack().len() >= join.stack().len());
+        ns.cancel(join);
+        stack[sh].push(ns);
     }
     stack
 }
 
 /// Check no state in a given set of states offers no value.  That is
 /// where we no *nothing* about the stack in the case.
-fn is_useful(states: &[&AbstractState]) -> bool {
+fn is_useful(states: &[AbstractState]) -> bool {
     if states.len() == 0 { return false; }
     for st in states {
         if !has_value(st) { return false; }
