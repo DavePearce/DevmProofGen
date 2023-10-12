@@ -3,6 +3,7 @@ mod block;
 mod opcodes;
 mod printer;
 
+use std::env;
 use std::fs;
 use std::fs::File;
 use std::io::{BufWriter,Write};
@@ -29,17 +30,20 @@ fn main() -> Result<(), Box<dyn Error>> {
              .value_name("SIZE")
              .value_parser(clap::value_parser!(usize))
              .default_value("65535"))
+        .arg(Arg::new("outdir").long("outdir").short('s').value_name("DIR"))
         .arg(Arg::new("split").long("split").value_name("json-file"))
         .arg(Arg::new("target").required(true))        
         .get_matches();
     // Extract arguments
+    let outdir : Option<&String> = matches.get_one("outdir");
     let overflows = matches.is_present("overflow");
     let blocksize : &usize = matches.get_one("blocksize").unwrap();
-    let target = matches.get_one::<String>("target").unwrap();
+    let target = matches.get_one::<String>("target").unwrap();    
     // Read from asm file
     let hex = fs::read_to_string(target)?;
     let bytes = hex.from_hex_string()?;    
     // Setup configuration
+    configure_outdir(outdir);    
     let mut roots = HashMap::new();
     let prefix = default_prefix(target);    
     roots.insert((0,0),"main".to_string());
@@ -61,6 +65,17 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn default_prefix(name: &str) -> String {
     name.replace(".","_")
+}
+
+fn configure_outdir(outdir: Option<&String>) {
+    // Create output directory
+    match outdir {
+        None => {}
+        Some(d) => {
+            fs::create_dir_all(d);
+            env::set_current_dir(d);            
+        }
+    };
 }
 
 struct BlockGroup {
