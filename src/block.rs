@@ -6,6 +6,7 @@ use crate::opcodes::OPCODES;
 
 #[derive(Clone,Debug)]
 pub enum Bytecode {
+    Call,
     Comment(String),
     Unit(bool,&'static str),
     Push(Vec<u8>),
@@ -181,7 +182,10 @@ fn add_debug_info(block: &mut Block, states: &[AbstractState]) {
 }
 
 fn translate_insn(insn: &Instruction, mut done: bool, states: &[AbstractState]) -> (Bytecode,bool) {
-    let bc = match insn {    
+    let bc = match insn {
+        CALL => Bytecode::Call,
+        CALLCODE => todo!(),
+        DELEGATECALL => todo!(),        
         DUP(n) => Bytecode::Dup(*n),
         HAVOC(n) => {
             // Virtual instructions
@@ -204,6 +208,7 @@ fn translate_insn(insn: &Instruction, mut done: bool, states: &[AbstractState]) 
         LOG(n) =>  Bytecode::Log(*n),            
         PUSH(bytes) => { Bytecode::Push(bytes.clone()) }
         RJUMPI(_)|RJUMP(_) => { todo!() }
+        STATICCALL => todo!(),        
         SWAP(n) =>  Bytecode::Swap(*n),      
         _ => {
             let name = &OPCODES[insn.opcode() as usize];
