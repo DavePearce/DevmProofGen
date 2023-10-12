@@ -37,14 +37,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let blocksize : &usize = matches.get_one("blocksize").unwrap();
     let target = matches.get_one::<String>("target").unwrap();
     // Read from asm file
-    let hex = fs::read_to_string(target)?;    
-    let bytes = hex.from_hex_string()?;
+    let hex = fs::read_to_string(target)?;
+    let bytes = hex.from_hex_string()?;    
     // Setup configuration
     let mut roots = HashMap::new();
-    let prefix = default_prefix(target);
+    let prefix = default_prefix(target);    
     roots.insert((0,0),"main".to_string());
-    // Disassemble bytes into instructions
-    let mut contract = Assembly::from_legacy_bytes(&bytes);
+    // Disassemble bytes into instructions    
+    let mut contract = Assembly::from_legacy_bytes(&bytes);    
     // Infer havoc instructions
     contract = infer_havoc_insns(contract);
     // Deconstruct into sequences
@@ -146,11 +146,15 @@ fn write_headers(prefix: &str, contract: &Assembly) -> Result<(), Box<dyn Error>
                 println!("Writing {filename}");
                 let mut f = BufWriter::new(File::create(filename)?);
                 writeln!(f,"include \"../evm-dafny/src/dafny/evm.dfy\"")?;
+                writeln!(f,"include \"../evm-dafny/src/dafny/state.dfy\"")?;                
                 writeln!(f,"")?;
                 writeln!(f,"module Header {{")?;
                 writeln!(f,"\timport opened Int");
+                writeln!(f,"\timport EvmState");                
                 writeln!(f,"");                
                 write_bytecode(&mut f, insns, i);
+                // for now
+                write_external_call(&mut f);
                 writeln!(f,"}}")?;
             }
             StructuredSection::Data(bytes) => {
@@ -177,6 +181,14 @@ fn write_bytecode<T:Write>(mut f: T, insns: &[Instruction], id: usize) {
     }
     writeln!(f,"\n\t]");
 }
+
+fn write_external_call<T:Write>(mut f: T) {
+    writeln!(f,"\tmethod external_call(sender: u160, st: EvmState.ExecutingState) returns (r:EvmState.TerminatedState)");
+    writeln!(f,"\tensures r.RETURNS? ==> r.world.Exists(sender) {{");
+    writeln!(f,"\t\treturn EvmState.ERROR(EvmState.INSUFFICIENT_GAS); // dummy");
+    writeln!(f,"\t}}");
+}
+
 
 // ===================================================================
 

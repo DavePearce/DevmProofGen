@@ -8,6 +8,10 @@ use crate::analysis::*;
 use crate::opcodes::{OPCODES};
 use crate::PreconditionFn;
 
+/// Responsible for printing individual blocks to a given writer.
+/// What makes this complicated is that, at block boundaries, we want
+/// to extract known information and include that in the `requires`
+/// clause of the corresponding Dafny method.
 pub struct BlockPrinter<T:Write> {
     id: usize,
     out: T
@@ -86,7 +90,7 @@ impl<T:Write> BlockPrinter<T> {
                 }
                 if min != max { write!(self.out,")"); }
                 writeln!(self.out,"");
-            }            
+            } 
         }
     }
 
@@ -122,6 +126,9 @@ impl<T:Write> BlockPrinter<T> {
     fn print_code(&mut self, code: &Bytecode) {
         //
         match code {
+            Bytecode::Call => {
+                self.print_call();
+            }
             Bytecode::Comment(s) => {
                 writeln!(self.out,"\t\t// {s}");
             }
@@ -199,7 +206,17 @@ impl<T:Write> BlockPrinter<T> {
         for target in targets {
             writeln!(self.out,"\t\tassume st.IsJumpDest({target:#x});");
         }
-    }                
+    }
+
+    fn print_call(&mut self) {
+        writeln!(self.out,"\t\tvar CONTINUING(cc) := Call(st);");
+        writeln!(self.out,"\t\t{{");
+        writeln!(self.out,"\t\t\tvar inner := cc.CallEnter(1);");
+        writeln!(self.out,"\t\t\tif inner.EXECUTING? {{ inner := external_call(cc.sender,inner); }}");
+        writeln!(self.out,"\t\t\tst := cc.CallReturn(inner);");
+        writeln!(self.out,"\t\t}}");
+    }
+    
 }
 
 fn stacked_states(states: &[AbstractState], n:usize) -> Vec<Vec<&AbstractState>> {
@@ -234,13 +251,3 @@ fn has_value(st: &AbstractState) -> bool {
     }
     count > 0
 }
-
-
-// fn print_call() {
-//     println!("\tvar CONTINUING(cc) := Call(st);");
-//     println!("\t{{");
-//     println!("\t\tvar inner := cc.CallEnter(1);");
-//     println!("\t\tif inner.EXECUTING? {{ inner := external_call(cc.sender,inner); }}");
-//     println!("\t\tst := cc.CallReturn(inner);");
-//     println!("\t}}");
-// }
