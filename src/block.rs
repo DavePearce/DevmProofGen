@@ -42,7 +42,7 @@ impl Block {
     pub fn bytecodes(&self) -> &[Bytecode] {
         &self.bytecodes
     }
-    pub fn stack_heights(&self) -> (usize,usize) {
+    pub fn stack_bounds(&self) -> (usize,usize) {
         let mut min = usize::MAX;
         let mut max = 0;
         // 
@@ -52,6 +52,15 @@ impl Block {
         }
         //
         (min,max)        
+    }
+    pub fn stack_heights(&self) -> Vec<usize> {
+        let mut hs = Vec::new();
+        for s in &self.states {
+            hs.push(s.stack().len());
+        }
+        hs.sort();
+        hs.dedup();
+        hs
     }
     pub fn freemem_ptrs(&self) -> Option<(usize,usize)> {
         let mut min = usize::MAX;

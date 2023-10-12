@@ -54,7 +54,7 @@ impl<T:Write> BlockPrinter<T> {
         match fmps {
             Some((v,w)) => {
                 if v >= 0x60 {
-                    writeln!(self.out,"\t// free memory pointer");                    
+                    writeln!(self.out,"\t// Free memory pointer");                    
                     write!(self.out,"\trequires Memory.Size(st'.evm.memory) >= 0x60 && ");                
                     if v == w {
                         writeln!(self.out,"st'.Read(0x40) == {:#02x}",v);
@@ -68,14 +68,9 @@ impl<T:Write> BlockPrinter<T> {
     }
     
     fn print_stack_requires(&mut self, block: &Block) {
-        let (min,max) = block.stack_heights();        
         // Generic stack bounds
-        writeln!(self.out,"\t// stack height(s)");
-        if min == max {
-            writeln!(self.out,"\trequires st'.Operands() == {min}");
-        } else {
-            writeln!(self.out,"\trequires st'.Operands() >= {min} && st'.Operands() <= {max}");
-        }        
+        writeln!(self.out,"\t// Stack height(s)");
+        self.print_stack_heights(block);
         // Determine constant items
         let join = join_states(block.states());
         // Print static items
@@ -84,28 +79,48 @@ impl<T:Write> BlockPrinter<T> {
         self.print_dynamic_stack_requires(block,&join);
     }
 
+    fn print_stack_heights(&mut self, block: &Block) {
+        // Compute min \& max heights
+        let (min,max) = block.stack_bounds();
+        let heights = block.stack_heights();
+        let mut contig = true;
+        for i in 0..heights.len() {
+            if heights[i] != (min+i) { contig = false; }
+        }
+        //
+        if min == max {
+            writeln!(self.out,"\trequires st'.Operands() == {min}");
+        } else if contig {
+            writeln!(self.out,"\trequires st'.Operands() >= {min} && st'.Operands() <= {max}");
+        } else {
+            write!(self.out,"\trequires st'.Operands() in {{");
+            for h in heights {
+                if h != min { write!(self.out,","); }
+                write!(self.out,"{h}");
+            }
+            writeln!(self.out,"}}");
+        }
+    }        
+    
     fn print_dynamic_stack_requires(&mut self, block: &Block, join: &AbstractState) {
-        let (min,max) = block.stack_heights();                
+        let (min,max) = block.stack_bounds();                
         // Decompose states        
         let stacked = stacked_states(block.states(),join,max+1);        
         //
         for (sh,sts) in stacked.iter().enumerate() {
             if min <= sh && is_useful(&sts) {
-                if min == sh { writeln!(self.out,"\t// dynamic stack items"); }                
+                if min == sh { writeln!(self.out,"\t// Dynamic stack items"); }                
                 write!(self.out,"\trequires ");
                 if min != max { write!(self.out,"st'.Operands() == {sh} ==> ("); }
                 for (i,st) in sts.iter().enumerate() {
                     if i != 0 {
-                        writeln!(self.out,"");
-                        write!(self.out,"\t || ");
+                        write!(self.out," || ");
                     }
                     self.print_state(st);
                 }
                 if min != max { write!(self.out,")"); }
                 writeln!(self.out,"");
-            } else if min <= sh && sts.len() == 0 {
-                writeln!(self.out,"\trequires st'.Operands() != {sh}");                
-            }
+            } 
         }
     }
 
@@ -115,7 +130,7 @@ impl<T:Write> BlockPrinter<T> {
         let atleast_one = join.stack().iter().fold(false,|a,e| a || matches!(e,Some(_)));
         //
         if atleast_one {
-            writeln!(self.out,"\t// static stack items");
+            writeln!(self.out,"\t// Static stack items");
             write!(self.out,"\trequires ");
             self.print_state(join);
             writeln!(self.out);
