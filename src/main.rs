@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn Error>> {
              .value_name("SIZE")
              .value_parser(clap::value_parser!(usize))
              .default_value("65535"))
-        .arg(Arg::new("outdir").long("outdir").short('s').value_name("DIR"))
+        .arg(Arg::new("outdir").long("outdir").short('o').value_name("DIR"))
         .arg(Arg::new("split").long("split").value_name("json-file"))
         .arg(Arg::new("target").required(true))        
         .get_matches();
