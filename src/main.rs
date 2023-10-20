@@ -10,7 +10,7 @@ use std::io::{BufWriter,Write};
 use std::collections::HashMap;
 use std::error::Error;
 use clap::{Arg, Command};
-use evmil::analysis::{insert_havocs,trace};
+use evmil::analysis::{BlockGraph,insert_havocs,trace};
 use evmil::bytecode::{Assemble, Assembly, Instruction, StructuredSection};
 use evmil::bytecode::Instruction::*;
 use evmil::util::{FromHexString,ToHexString};
@@ -52,9 +52,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Infer havoc instructions
     contract = infer_havoc_insns(contract);
     // Deconstruct into sequences
-    let blkseqs = deconstruct(&contract,*blocksize);
+    let (blkseqs,cfgs) = deconstruct(&contract,*blocksize);
     // Group subsequences
-    let groups = group(roots,&blkseqs);
+    let groups = group(roots,&blkseqs,&cfgs);
     //
     write_headers(&prefix,&contract);
     // Write files
@@ -86,13 +86,15 @@ struct BlockGroup {
 
 // Given an assembly, deconstruct it into a set of blocks of a given
 // maximum size.
-fn deconstruct(contract: &Assembly, blocksize: usize) -> Vec<BlockSequence> {
+fn deconstruct(contract: &Assembly, blocksize: usize) -> (Vec<BlockSequence>,Vec<BlockGraph>) {
     let mut blocks = Vec::new();
+    let mut cfgs = Vec::new();
     //
     for s in contract {
         match s {
             StructuredSection::Code(insns) => {
                 blocks.push(BlockSequence::from_insns(blocksize,insns));
+                cfgs.push(BlockGraph::from(insns.as_ref()));
             }
             StructuredSection::Data(bytes) => {
                 // Nothing (for now)
@@ -100,15 +102,15 @@ fn deconstruct(contract: &Assembly, blocksize: usize) -> Vec<BlockSequence> {
         }
     }
     //
-    blocks
+    (blocks,cfgs)
 }
 
 // Given a sequence of blocks, generate a set of block groups.
-fn group(roots: HashMap<(usize,usize),String>, blocks: &[BlockSequence]) -> Vec<BlockGroup> {
+fn group(roots: HashMap<(usize,usize),String>, blocks: &[BlockSequence], cfgs: &[BlockGraph]) -> Vec<BlockGroup> {
     let mut groups = Vec::new();
     //
     for (i,blk) in blocks.iter().enumerate() {
-        groups.extend(split(&roots,i,blk));
+        groups.extend(split(&roots,i,blk,&cfgs[i]));
     }
     //
     groups
@@ -116,7 +118,7 @@ fn group(roots: HashMap<(usize,usize),String>, blocks: &[BlockSequence]) -> Vec<
 
 /// Split a given sequence of blocks (in the same code segment) upto
 /// into one or more groups.
-fn split(roots: &HashMap<(usize,usize),String>, id: usize, blocks: &BlockSequence) -> Vec<BlockGroup> {
+fn split(roots: &HashMap<(usize,usize),String>, id: usize, blocks: &BlockSequence, cfg: &BlockGraph) -> Vec<BlockGroup> {
     let name = roots.get(&(id,0x00)).unwrap().clone();
     // HACK FOR NOW
     let grp = BlockGroup{id,name,blocks: blocks.clone().to_vec()};
