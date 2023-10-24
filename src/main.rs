@@ -1,5 +1,6 @@
 mod analysis;
 mod block;
+mod cfg;
 mod opcodes;
 mod printer;
 
@@ -13,12 +14,11 @@ use clap::{Arg, Command};
 use evmil::analysis::{BlockGraph,insert_havocs,trace};
 use evmil::bytecode::{Assemble, Assembly, Instruction, StructuredSection};
 use evmil::bytecode::Instruction::*;
-use evmil::util::{FromHexString,ToHexString};
-
+use evmil::util::{dominators,FromHexString,SortedVec,ToHexString};
 use analysis::{State};
 use block::{Block,BlockSequence};
+use cfg::ControlFlowGraph;
 use printer::*;
-
 
 fn main() -> Result<(), Box<dyn Error>> {
     //let args: Vec<String> = env::args().collect();
@@ -52,9 +52,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Infer havoc instructions
     contract = infer_havoc_insns(contract);
     // Deconstruct into sequences
-    let (blkseqs,cfgs) = deconstruct(&contract,*blocksize);
+    let mut cfgs = deconstruct(&contract,*blocksize);
+    // Configure roots
+    for (c,r) in roots.keys() {
+        cfgs[*c].add_root(*r);
+    }
     // Group subsequences
-    let groups = group(roots,&blkseqs,&cfgs);
+    let groups = group(roots,&cfgs);
     //
     write_headers(&prefix,&contract);
     // Write files
@@ -84,17 +88,18 @@ struct BlockGroup {
     blocks: Vec<Block>
 }
 
+type DomSet = SortedVec<usize>;
+
 // Given an assembly, deconstruct it into a set of blocks of a given
 // maximum size.
-fn deconstruct(contract: &Assembly, blocksize: usize) -> (Vec<BlockSequence>,Vec<BlockGraph>) {
-    let mut blocks = Vec::new();
+fn deconstruct(contract: &Assembly, blocksize: usize) -> Vec<ControlFlowGraph> {
     let mut cfgs = Vec::new();
     //
-    for s in contract {
+    for (i,s) in contract.iter().enumerate() {
         match s {
             StructuredSection::Code(insns) => {
-                blocks.push(BlockSequence::from_insns(blocksize,insns));
-                cfgs.push(BlockGraph::from(insns.as_ref()));
+                let cfg = ControlFlowGraph::new(i,blocksize,insns.as_ref());
+                cfgs.push(cfg);
             }
             StructuredSection::Data(bytes) => {
                 // Nothing (for now)
@@ -102,28 +107,31 @@ fn deconstruct(contract: &Assembly, blocksize: usize) -> (Vec<BlockSequence>,Vec
         }
     }
     //
-    (blocks,cfgs)
+    cfgs
 }
 
 // Given a sequence of blocks, generate a set of block groups.
-fn group(roots: HashMap<(usize,usize),String>, blocks: &[BlockSequence], cfgs: &[BlockGraph]) -> Vec<BlockGroup> {
+fn group(roots: HashMap<(usize,usize),String>, cfgs: &[ControlFlowGraph]) -> Vec<BlockGroup> {
     let mut groups = Vec::new();
     //
-    for (i,blk) in blocks.iter().enumerate() {
-        groups.extend(split(&roots,i,blk,&cfgs[i]));
-    }
+    for cfg in cfgs { groups.extend(split(&roots,cfg)); }
     //
     groups
 }
 
 /// Split a given sequence of blocks (in the same code segment) upto
 /// into one or more groups.
-fn split(roots: &HashMap<(usize,usize),String>, id: usize, blocks: &BlockSequence, cfg: &BlockGraph) -> Vec<BlockGroup> {
-    let name = roots.get(&(id,0x00)).unwrap().clone();
-    // HACK FOR NOW
-    let grp = BlockGroup{id,name,blocks: blocks.clone().to_vec()};
-    // Done?
-    vec![grp]
+fn split(roots: &HashMap<(usize,usize),String>, cfg: &ControlFlowGraph) -> Vec<BlockGroup> {
+    let cid = cfg.cid();
+    let mut groups = Vec::new();
+    //
+    for r in cfg.roots() {
+        let blocks = cfg.get_owned(*r);
+        let name = roots.get(&(cid,*r)).unwrap().clone();
+        groups.push(BlockGroup{id: cid, name, blocks});
+    }
+    //
+    groups
 }
 
 /// Convert each block group into a sequence of one or more files
