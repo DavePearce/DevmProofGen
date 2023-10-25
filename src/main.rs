@@ -115,7 +115,8 @@ struct ConfigFile {
 struct BlockGroup {
     id: usize,
     name: String,
-    blocks: Vec<Block>
+    blocks: Vec<Block>,
+    deps: Vec<usize>
 }
 
 type DomSet = SortedVec<usize>;
@@ -154,40 +155,82 @@ fn group(roots: HashMap<(usize,usize),String>, cfgs: &[ControlFlowGraph]) -> Vec
 fn split(roots: &HashMap<(usize,usize),String>, cfg: &ControlFlowGraph) -> Vec<BlockGroup> {
     let cid = cfg.cid();
     let mut groups = Vec::new();
-    //
+    // Split out groups
     for r in cfg.roots() {
         let blocks = cfg.get_owned(*r);
-        println!("Root {} owns {blocks:?}",*r);
         let name = roots.get(&(cid,*r)).unwrap().clone();
-        groups.push(BlockGroup{id: cid, name, blocks});
+        groups.push(BlockGroup{id: cid, name, blocks, deps: Vec::new()});
+    }
+    // Determine dependencies
+    for i in 0..groups.len() {
+        groups[i].deps = dependencies(i,&groups, cfg);
     }
     //
     groups
 }
 
+/// Calculate the dependencies for the `ith` group in a give set of
+/// groups.
+fn dependencies(i: usize, groups: &[BlockGroup], cfg: &ControlFlowGraph) -> Vec<usize> {
+    let ith = &groups[i];
+    let mut deps = Vec::new();
+    //
+    for j in 0..groups.len() {
+        let jth = &groups[j];
+        if i != j && touches_any(cfg,&ith.blocks,&jth.blocks) {
+            deps.push(j);
+        }
+    }
+    //
+    deps
+}
+
+
+/// Check whether any node from one set touches any other node in
+/// another set.
+fn touches_any(cfg: &ControlFlowGraph, from: &[Block], to: &[Block]) -> bool {
+    for f in from {
+        for t in to {
+            if cfg.touches(f.pc(),t.pc()) {
+                return true;
+            }
+        }
+    }
+    false
+}    
+
 /// Convert each block group into a sequence of one or more files
 /// using a given prefix.
 fn write_groups(prefix: &str, groups: Vec<BlockGroup>) -> Result<(), Box<dyn Error>> {
-    for g in groups {
+    for i in 0..groups.len() {
+        let g = &groups[i];
         let filename = format!("{prefix}_{}_{}.dfy",g.id,g.name);
         let header = format!("{prefix}_{}_header.dfy",g.id);        
         println!("Writing {filename}");
         let mut f = BufWriter::new(File::create(filename)?);
         writeln!(f,"include \"../evm-dafny/src/dafny/evm.dfy\"");
         writeln!(f,"include \"../evm-dafny/src/dafny/core/code.dfy\"");        
-        writeln!(f,"include \"{header}\"");                
+        writeln!(f,"include \"{header}\"");
+        for d in &g.deps {
+            let dep = format!("{prefix}_{}_{}.dfy",g.id,&groups[*d].name);
+            writeln!(f,"include \"{dep}\"");            
+        }
         writeln!(f,"");
         writeln!(f,"module {} {{",g.name);
         writeln!(f,"\timport opened Opcode");
         writeln!(f,"\timport opened Code");
         writeln!(f,"\timport opened Memory");
         writeln!(f,"\timport opened Bytecode");
-        writeln!(f,"\timport opened Header");        
+        writeln!(f,"\timport opened Header");
+        for d in &g.deps {
+            writeln!(f,"\timport opened {}",&groups[*d].name);            
+        }        
+        // Write out imports for dependencies
         writeln!(f,"");                
         // Construct block printer
         let mut printer = BlockPrinter::new(g.id,&mut f);
         //
-        for blk in g.blocks { printer.print_block(&blk); }
+        for blk in &g.blocks { printer.print_block(&blk); }
         writeln!(f,"}}");
     }
     Ok(())

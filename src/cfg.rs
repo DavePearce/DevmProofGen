@@ -42,6 +42,14 @@ impl<'a> ControlFlowGraph<'a> {
     pub fn roots(&self) -> &[usize] {
         &self.roots
     }
+
+    /// Check whether a given root reaches another in one step
+    /// (i.e. touches).
+    pub fn touches(&self, from: usize, to: usize) -> bool {
+        let f = self.graph.nodes().lookup_pc(from);
+        let t = self.graph.nodes().lookup_pc(to);
+        self.graph.outgoing(f).contains(&t)
+    }
     
     pub fn add_root(&mut self, pc: usize) {
         self.roots.push(pc);
@@ -67,22 +75,17 @@ impl<'a> ControlFlowGraph<'a> {
     /// roots are absolute byte offset within the original bytecode
     /// sequence.
     pub fn owns(&self, root: usize, blk: &Block) -> bool {
-        print!("Does {root} own {}? ",blk.pc());
         // Dominator check
         if self.dominates(root,blk.pc()) {
             // Internal owner checker
             for r in &self.roots {
                 if *r != root && self.dominates(*r,blk.pc()) && self.dominates(root,*r) {
                     // An inner root dominates this block.                    
-                    println!("NOPE (1)");
                     return false;
                 }
             }
-            println!("YUP");            
             true
         } else {
-            // Nope
-            println!("NOPE (2)");
             false
         }
     }
@@ -92,8 +95,6 @@ impl<'a> ControlFlowGraph<'a> {
         let gp = self.graph.nodes().lookup_pc(parent);
         let gc = self.graph.nodes().lookup_pc(child);
         // Dominator check
-        let r = self.dominators[gc].contains(gp);
-        println!("Does {parent} ({gp}) dominate {child} ({gc})? {r}");
-        r
+        self.dominators[gc].contains(gp)
     }
 }
