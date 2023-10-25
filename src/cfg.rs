@@ -67,18 +67,22 @@ impl<'a> ControlFlowGraph<'a> {
     /// roots are absolute byte offset within the original bytecode
     /// sequence.
     pub fn owns(&self, root: usize, blk: &Block) -> bool {
+        print!("Does {root} own {}? ",blk.pc());
         // Dominator check
         if self.dominates(root,blk.pc()) {
             // Internal owner checker
             for r in &self.roots {
                 if *r != root && self.dominates(*r,blk.pc()) && self.dominates(root,*r) {
-                    // An inner root dominates this block.
+                    // An inner root dominates this block.                    
+                    println!("NOPE (1)");
                     return false;
                 }
             }
+            println!("YUP");            
             true
         } else {
             // Nope
+            println!("NOPE (2)");
             false
         }
     }
@@ -88,6 +92,8 @@ impl<'a> ControlFlowGraph<'a> {
         let gp = self.graph.nodes().lookup_pc(parent);
         let gc = self.graph.nodes().lookup_pc(child);
         // Dominator check
-        self.dominators[gc].contains(gp)
+        let r = self.dominators[gc].contains(gp);
+        println!("Does {parent} ({gp}) dominate {child} ({gc})? {r}");
+        r
     }
 }

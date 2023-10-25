@@ -20,7 +20,7 @@ pub enum Bytecode {
 /// Represents a basic block within a given sequence of instructions.
 /// All relevant information for generating the proof object is
 /// included.
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub struct Block {
     // The starting PC for this block
     pc: usize,

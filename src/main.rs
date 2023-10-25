@@ -11,6 +11,7 @@ use std::io::{BufWriter,Write};
 use std::collections::HashMap;
 use std::error::Error;
 use clap::{Arg, Command};
+use serde::Deserialize;
 use evmil::analysis::{BlockGraph,insert_havocs,trace};
 use evmil::bytecode::{Assemble, Assembly, Instruction, StructuredSection};
 use evmil::bytecode::Instruction::*;
@@ -38,15 +39,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     let outdir : Option<&String> = matches.get_one("outdir");
     let overflows = matches.is_present("overflow");
     let blocksize : &usize = matches.get_one("blocksize").unwrap();
-    let target = matches.get_one::<String>("target").unwrap();    
+    let target = matches.get_one::<String>("target").unwrap();
     // Read from asm file
     let hex = fs::read_to_string(target)?;
     let bytes = hex.from_hex_string()?;    
     // Setup configuration
-    configure_outdir(outdir);    
     let mut roots = HashMap::new();
-    let prefix = default_prefix(target);    
+    let prefix = default_prefix(target);
+    // Configure roots
     roots.insert((0,0),"main".to_string());
+    // Check if a config is provided
+    if matches.is_present("split") {
+        let split_filename = matches.get_one::<String>("split").unwrap();
+        let split_file = fs::read_to_string(split_filename)?;        
+        let cf: ConfigFile = serde_json::from_str(&split_file)?;
+        //
+        for f in cf.functions {
+            roots.insert((f.cid,f.pc),f.name);
+        }
+    }    
     // Disassemble bytes into instructions    
     let mut contract = Assembly::from_legacy_bytes(&bytes);    
     // Infer havoc instructions
@@ -59,7 +70,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     // Group subsequences
     let groups = group(roots,&cfgs);
-    //
+    // Set output directory
+    configure_outdir(outdir);    
     write_headers(&prefix,&contract);
     // Write files
     write_groups(&prefix,groups);
@@ -80,6 +92,24 @@ fn configure_outdir(outdir: Option<&String>) {
             env::set_current_dir(d);            
         }
     };
+}
+
+#[derive(Debug, Deserialize)]
+struct PublicFunction {
+    /// Name given for this code root (e.g. name of the public
+    /// function it represents).
+    name: String,
+    /// Code id for this root (i.e. which code section this root
+    /// applies to).
+    cid: usize,
+    /// Absolute byte offset within code section which demarks the
+    /// start of this function.
+    pc: usize 
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfigFile {
+    functions: Vec<PublicFunction>
 }
 
 struct BlockGroup {
@@ -127,6 +157,7 @@ fn split(roots: &HashMap<(usize,usize),String>, cfg: &ControlFlowGraph) -> Vec<B
     //
     for r in cfg.roots() {
         let blocks = cfg.get_owned(*r);
+        println!("Root {} owns {blocks:?}",*r);
         let name = roots.get(&(cid,*r)).unwrap().clone();
         groups.push(BlockGroup{id: cid, name, blocks});
     }
