@@ -1,6 +1,6 @@
 use evmil::bytecode::{Assemble, Assembly, Instruction, StructuredSection};
 use evmil::analysis::{BlockGraph};
-use evmil::util::{dominators,SortedVec};
+use evmil::util::{dominators,SortedVec,transitive_closure};
 use crate::block::{Block,BlockSequence};
 
 type DomSet = SortedVec<usize>;
@@ -12,8 +12,12 @@ pub struct ControlFlowGraph<'a> {
     cid: usize,
     /// Underlying digraph representation
     graph: BlockGraph<'a>,
-    /// Computed dominators set
+    /// Computed dominators sets.  That is, for each node, the set of
+    /// its dominators (including itself).
     dominators: Vec<DomSet>,
+    /// Transitive closure.  That is, for each node, the the set of
+    /// nodes it can reach (not necessarily including itself).
+    reaches: Vec<DomSet>,
     /// Set of designated owners.  These are absolute byte offsets
     /// within the original instruction stream.
     roots: Vec<usize>,
@@ -29,10 +33,12 @@ impl<'a> ControlFlowGraph<'a> {
         let graph = BlockGraph::from(insns);
         // Compute dominators
         let dominators = dominators(&graph);
+        // Compute transitive closure
+        let reaches = transitive_closure(&graph);
         // Determine block decomposition based on the given block size.
         let blocks = BlockSequence::from_insns(blocksize,insns);        
         // Done
-        Self{cid,graph,dominators,blocks, roots: Vec::new()}
+        Self{cid,graph,dominators,reaches,blocks, roots: Vec::new()}
     }
 
     pub fn cid(&self) -> usize {
@@ -48,7 +54,7 @@ impl<'a> ControlFlowGraph<'a> {
     pub fn touches(&self, from: usize, to: usize) -> bool {
         let f = self.graph.nodes().lookup_pc(from);
         let t = self.graph.nodes().lookup_pc(to);
-        self.graph.outgoing(f).contains(&t)
+        self.graph.outgoing(f).contains(t)
     }
     
     pub fn add_root(&mut self, pc: usize) {
@@ -79,8 +85,8 @@ impl<'a> ControlFlowGraph<'a> {
         if self.dominates(root,blk.pc()) {
             // Internal owner checker
             for r in &self.roots {
-                if *r != root && self.dominates(*r,blk.pc()) && self.dominates(root,*r) {
-                    // An inner root dominates this block.                    
+                if *r != root && self.dominates(root,*r) && self.reaches(*r,blk.pc()) {
+                    // An inner root reaches this block, hence it cannot be owned.
                     return false;
                 }
             }
@@ -96,5 +102,14 @@ impl<'a> ControlFlowGraph<'a> {
         let gc = self.graph.nodes().lookup_pc(child);
         // Dominator check
         self.dominators[gc].contains(gp)
+    }
+
+    /// Check whether a given node can reach another through one or
+    /// more steps.
+    pub fn reaches(&self, parent: usize, child: usize) -> bool {
+        let gp = self.graph.nodes().lookup_pc(parent);
+        let gc = self.graph.nodes().lookup_pc(child);
+        // Reachability check
+        self.reaches[gp].contains(gc)
     }
 }
