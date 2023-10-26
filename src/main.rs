@@ -33,6 +33,7 @@ fn main() -> Result<(), Box<dyn Error>> {
              .value_parser(clap::value_parser!(usize))
              .default_value("65535"))
         .arg(Arg::new("outdir").long("outdir").short('o').value_name("DIR"))
+        .arg(Arg::new("devmdir").long("devmdir").value_name("DIR").default_value("evm-dafny"))
         .arg(Arg::new("split").long("split").value_name("json-file"))
         .arg(Arg::new("target").required(true))        
         .get_matches();
@@ -41,6 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let overflows = matches.is_present("overflow");
     let blocksize : &usize = matches.get_one("blocksize").unwrap();
     let target = matches.get_one::<String>("target").unwrap();
+    let devmdir = matches.get_one::<String>("devmdir").unwrap();
     // Read from asm file
     let hex = fs::read_to_string(target)?;
     let bytes = hex.trim().from_hex_string()?;    
@@ -76,9 +78,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let groups = group(roots,&cfgs);
     // Set output directory
     configure_outdir(outdir);    
-    write_headers(&prefix,&contract);
+    write_headers(&devmdir,&prefix,&contract);
     // Write files
-    write_groups(&prefix,groups);
+    write_groups(&devmdir,&prefix,groups);
     // Done
     Ok(())
 }
@@ -242,15 +244,15 @@ fn touches_any(cfg: &ControlFlowGraph, from: &[Block], to: &[Block]) -> bool {
 
 /// Convert each block group into a sequence of one or more files
 /// using a given prefix.
-fn write_groups(prefix: &str, groups: Vec<BlockGroup>) -> Result<(), Box<dyn Error>> {
+fn write_groups(devmdir: &str, prefix: &str, groups: Vec<BlockGroup>) -> Result<(), Box<dyn Error>> {
     for i in 0..groups.len() {
         let g = &groups[i];
         let filename = format!("{prefix}_{}_{}.dfy",g.id,g.name);
         let header = format!("{prefix}_{}_header.dfy",g.id);        
         println!("Writing {filename}");
         let mut f = BufWriter::new(File::create(filename)?);
-        writeln!(f,"include \"../evm-dafny/src/dafny/evm.dfy\"");
-        writeln!(f,"include \"../evm-dafny/src/dafny/core/code.dfy\"");        
+        writeln!(f,"include \"{devmdir}/src/dafny/evm.dfy\"");
+        writeln!(f,"include \"{devmdir}/src/dafny/core/code.dfy\"");        
         writeln!(f,"include \"{header}\"");
         for d in &g.deps {
             let dep = format!("{prefix}_{}_{}.dfy",g.id,&groups[*d].name);
@@ -278,15 +280,15 @@ fn write_groups(prefix: &str, groups: Vec<BlockGroup>) -> Result<(), Box<dyn Err
 }
  
 /// Write out header files for all bytecode sections.
-fn write_headers(prefix: &str, contract: &Assembly) -> Result<(), Box<dyn Error>> {
+fn write_headers(devmdir: &str, prefix: &str, contract: &Assembly) -> Result<(), Box<dyn Error>> {
     for (i,s) in contract.iter().enumerate() {
         match s {
             StructuredSection::Code(insns) => {
                 let filename = format!("{prefix}_{}_header.dfy",i);
                 println!("Writing {filename}");
                 let mut f = BufWriter::new(File::create(filename)?);
-                writeln!(f,"include \"../evm-dafny/src/dafny/evm.dfy\"")?;
-                writeln!(f,"include \"../evm-dafny/src/dafny/state.dfy\"")?;                
+                writeln!(f,"include \"{devmdir}/src/dafny/evm.dfy\"")?;
+                writeln!(f,"include \"{devmdir}/src/dafny/state.dfy\"")?;                
                 writeln!(f,"")?;
                 writeln!(f,"module Header {{")?;
                 writeln!(f,"\timport opened Int");
