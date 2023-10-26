@@ -183,6 +183,8 @@ fn insns_to_block(mut n: usize, mut pc: usize, index: usize, insns: &[Instructio
         i += 1;
         n -= 1;
     }
+    // Connect blocks together
+    if n == 0 && !done { block.next = Some(pc); }    
     // Done
     (pc,i,block)
 }
