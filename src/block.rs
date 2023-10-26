@@ -98,6 +98,10 @@ impl BlockSequence {
         Self{blocks}
     }
 
+    pub fn as_ref(&self) -> &[Block] {
+        &self.blocks
+    }
+    
     pub fn iter(&self) -> std::slice::Iter<Block> {
         self.blocks.iter()
     }

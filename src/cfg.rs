@@ -49,6 +49,10 @@ impl<'a> ControlFlowGraph<'a> {
         &self.roots
     }
 
+    pub fn blocks(&self) -> &[Block] {
+        self.blocks.as_ref()
+    }
+    
     /// Check whether a given root reaches another in one step
     /// (i.e. touches).
     pub fn touches(&self, from: usize, to: usize) -> bool {

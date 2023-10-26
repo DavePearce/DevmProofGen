@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let target = matches.get_one::<String>("target").unwrap();
     // Read from asm file
     let hex = fs::read_to_string(target)?;
-    let bytes = hex.from_hex_string()?;    
+    let bytes = hex.trim().from_hex_string()?;    
     // Setup configuration
     let mut roots = HashMap::new();
     let prefix = default_prefix(target);
@@ -161,6 +161,18 @@ fn split(roots: &HashMap<(usize,usize),String>, cfg: &ControlFlowGraph) -> Vec<B
         let name = roots.get(&(cid,*r)).unwrap().clone();
         groups.push(BlockGroup{id: cid, name, blocks, deps: Vec::new()});
     }
+    // Add utility group (if applicable)
+    let remainder = determine_remainder(&groups,&cfg);
+    //
+    if remainder.len() > 0 {
+        // Yes, applicable
+        groups.push(BlockGroup{
+            id: cid,
+            name: "util".to_string(),
+            blocks: remainder,
+            deps: Vec::new()
+        });
+    }
     // Determine dependencies
     for i in 0..groups.len() {
         groups[i].deps = dependencies(i,&groups, cfg);
@@ -185,6 +197,30 @@ fn dependencies(i: usize, groups: &[BlockGroup], cfg: &ControlFlowGraph) -> Vec<
     deps
 }
 
+/// Identify all blocks which have been allocated to a group.  These
+/// constitute the "remainder".  They are blocks which are not
+/// dominated by any root (except the entry) but are reachable by one
+/// or more internal roots.  As such, they need to be put into a
+/// catch-all utility file.
+fn determine_remainder(groups: &[BlockGroup], cfg: &ControlFlowGraph) -> Vec<Block> {
+    let mut blks = SortedVec::new();
+    // Initialise remainder
+    for b in cfg.blocks() { blks.insert(b.pc()); }
+    // Subtract everything allocated to a group
+    for g in groups {
+        for b in &g.blocks { blks.remove(&b.pc()); }
+    }
+    // Is there anything left?
+    let mut rem = Vec::new();
+    //
+    for b in cfg.blocks() {
+        if blks.contains(b.pc()) {
+            rem.push(b.clone());
+        }
+    }    
+    // Done
+    rem
+}
 
 /// Check whether any node from one set touches any other node in
 /// another set.

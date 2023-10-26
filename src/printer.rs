@@ -28,8 +28,14 @@ impl<T:Write> BlockPrinter<T> {
         // Print standard requires
         writeln!(self.out,"\trequires st'.evm.code == Code.Create(BYTECODE_{})",self.id);
         writeln!(self.out,"\trequires st'.WritesPermitted() && st'.PC() == {:#06x}",block.pc());
-        self.print_fmp_requires(block);
-        self.print_stack_requires(block);        
+        if block.states().len() == 0 {
+            // Deadcode
+            writeln!(self.out,"\t// Deadcode");            
+            writeln!(self.out,"\trequires false");
+        } else {
+            self.print_fmp_requires(block);
+            self.print_stack_requires(block);
+        }
         writeln!(self.out,"\t{{");
         writeln!(self.out,"\t\tvar st := st';");
         for code in block.iter() {
@@ -270,7 +276,7 @@ fn join_states(states: &[AbstractState]) -> AbstractState {
         r.join(&states[i]);
     }
     //
-    r
+        r
 }
 
 fn stacked_states(states: &[AbstractState], join: &AbstractState, n:usize) -> Vec<Vec<AbstractState>> {
