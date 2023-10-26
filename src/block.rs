@@ -222,7 +222,11 @@ fn translate_insn(insn: &Instruction, mut done: bool, states: &[AbstractState]) 
         PUSH(bytes) => { Bytecode::Push(bytes.clone()) }
         RJUMPI(_)|RJUMP(_) => { todo!() }
         STATICCALL => todo!(),        
-        SWAP(n) =>  Bytecode::Swap(*n),      
+        SWAP(n) =>  Bytecode::Swap(*n),
+        DATA(bytes) => {
+            done = true;
+            Bytecode::Unit(true,"Invalid")            
+        }
         _ => {
             let name = &OPCODES[insn.opcode() as usize];
             done = !insn.fallthru();
