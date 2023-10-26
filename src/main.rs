@@ -7,6 +7,7 @@ mod printer;
 use std::env;
 use std::fs;
 use std::fs::File;
+use std::path::Path;
 use std::io::{BufWriter,Write};
 use std::collections::HashMap;
 use std::error::Error;
@@ -54,8 +55,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         let split_file = fs::read_to_string(split_filename)?;        
         let cf: ConfigFile = serde_json::from_str(&split_file)?;
         //
-        for f in cf.functions {
-            roots.insert((f.cid,f.pc),f.name);
+        for (n,hs) in cf.functions {
+            // Strip off leader
+            let ths = hs.trim_start_matches("0x");
+            let pc = usize::from_str_radix(ths,16)?;
+            roots.insert((0,pc),n);
         }
     }    
     // Disassemble bytes into instructions    
@@ -80,7 +84,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn default_prefix(name: &str) -> String {
-    name.replace(".","_")
+    let filename = Path::new(name).file_stem().unwrap().to_str().unwrap();
+    filename.replace(".","_")
 }
 
 fn configure_outdir(outdir: Option<&String>) {
@@ -109,7 +114,7 @@ struct PublicFunction {
 
 #[derive(Debug, Deserialize)]
 struct ConfigFile {
-    functions: Vec<PublicFunction>
+    functions: HashMap<String,String>
 }
 
 struct BlockGroup {

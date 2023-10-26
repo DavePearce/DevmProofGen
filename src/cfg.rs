@@ -110,10 +110,10 @@ impl<'a> ControlFlowGraph<'a> {
 
     /// Check whether a given node can reach another through one or
     /// more steps.
-    pub fn reaches(&self, parent: usize, child: usize) -> bool {
+    pub fn reaches(&self, parent: usize, child: usize) -> bool {        
         let gp = self.graph.nodes().lookup_pc(parent);
         let gc = self.graph.nodes().lookup_pc(child);
         // Reachability check
-        self.reaches[gp].contains(gc)
+        parent == child || self.reaches[gp].contains(gc)
     }
 }

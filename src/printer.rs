@@ -43,7 +43,8 @@ impl<T:Write> BlockPrinter<T> {
         }
         match block.next() {
             Some(pc) => {
-                writeln!(self.out,"\t\tst := block_{}_{pc:#06x}(st); return st;",self.id);
+                writeln!(self.out,"\t\tst := block_{}_{pc:#06x}(st);",self.id);
+                writeln!(self.out,"\t\treturn st;");                
             }
             None => {
                 writeln!(self.out,"\t\treturn st;");
