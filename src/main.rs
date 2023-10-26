@@ -1,5 +1,6 @@
 mod analysis;
 mod block;
+mod cfg;
 mod opcodes;
 mod printer;
 
@@ -10,15 +11,15 @@ use std::io::{BufWriter,Write};
 use std::collections::HashMap;
 use std::error::Error;
 use clap::{Arg, Command};
-use evmil::analysis::{insert_havocs,trace};
+use serde::Deserialize;
+use evmil::analysis::{BlockGraph,insert_havocs,trace};
 use evmil::bytecode::{Assemble, Assembly, Instruction, StructuredSection};
 use evmil::bytecode::Instruction::*;
-use evmil::util::{FromHexString,ToHexString};
-
+use evmil::util::{dominators,FromHexString,SortedVec,ToHexString};
 use analysis::{State};
 use block::{Block,BlockSequence};
+use cfg::ControlFlowGraph;
 use printer::*;
-
 
 fn main() -> Result<(), Box<dyn Error>> {
     //let args: Vec<String> = env::args().collect();
@@ -38,24 +39,39 @@ fn main() -> Result<(), Box<dyn Error>> {
     let outdir : Option<&String> = matches.get_one("outdir");
     let overflows = matches.is_present("overflow");
     let blocksize : &usize = matches.get_one("blocksize").unwrap();
-    let target = matches.get_one::<String>("target").unwrap();    
+    let target = matches.get_one::<String>("target").unwrap();
     // Read from asm file
     let hex = fs::read_to_string(target)?;
-    let bytes = hex.from_hex_string()?;    
+    let bytes = hex.trim().from_hex_string()?;    
     // Setup configuration
-    configure_outdir(outdir);    
     let mut roots = HashMap::new();
-    let prefix = default_prefix(target);    
+    let prefix = default_prefix(target);
+    // Configure roots
     roots.insert((0,0),"main".to_string());
+    // Check if a config is provided
+    if matches.is_present("split") {
+        let split_filename = matches.get_one::<String>("split").unwrap();
+        let split_file = fs::read_to_string(split_filename)?;        
+        let cf: ConfigFile = serde_json::from_str(&split_file)?;
+        //
+        for f in cf.functions {
+            roots.insert((f.cid,f.pc),f.name);
+        }
+    }    
     // Disassemble bytes into instructions    
     let mut contract = Assembly::from_legacy_bytes(&bytes);    
     // Infer havoc instructions
     contract = infer_havoc_insns(contract);
     // Deconstruct into sequences
-    let blkseqs = deconstruct(&contract,*blocksize);
+    let mut cfgs = deconstruct(&contract,*blocksize);
+    // Configure roots
+    for (c,r) in roots.keys() {
+        cfgs[*c].add_root(*r);
+    }
     // Group subsequences
-    let groups = group(roots,&blkseqs);
-    //
+    let groups = group(roots,&cfgs);
+    // Set output directory
+    configure_outdir(outdir);    
     write_headers(&prefix,&contract);
     // Write files
     write_groups(&prefix,groups);
@@ -78,21 +94,43 @@ fn configure_outdir(outdir: Option<&String>) {
     };
 }
 
+#[derive(Debug, Deserialize)]
+struct PublicFunction {
+    /// Name given for this code root (e.g. name of the public
+    /// function it represents).
+    name: String,
+    /// Code id for this root (i.e. which code section this root
+    /// applies to).
+    cid: usize,
+    /// Absolute byte offset within code section which demarks the
+    /// start of this function.
+    pc: usize 
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfigFile {
+    functions: Vec<PublicFunction>
+}
+
 struct BlockGroup {
     id: usize,
     name: String,
-    blocks: Vec<Block>
+    blocks: Vec<Block>,
+    deps: Vec<usize>
 }
+
+type DomSet = SortedVec<usize>;
 
 // Given an assembly, deconstruct it into a set of blocks of a given
 // maximum size.
-fn deconstruct(contract: &Assembly, blocksize: usize) -> Vec<BlockSequence> {
-    let mut blocks = Vec::new();
+fn deconstruct(contract: &Assembly, blocksize: usize) -> Vec<ControlFlowGraph> {
+    let mut cfgs = Vec::new();
     //
-    for s in contract {
+    for (i,s) in contract.iter().enumerate() {
         match s {
             StructuredSection::Code(insns) => {
-                blocks.push(BlockSequence::from_insns(blocksize,insns));
+                let cfg = ControlFlowGraph::new(i,blocksize,insns.as_ref());
+                cfgs.push(cfg);
             }
             StructuredSection::Data(bytes) => {
                 // Nothing (for now)
@@ -100,53 +138,135 @@ fn deconstruct(contract: &Assembly, blocksize: usize) -> Vec<BlockSequence> {
         }
     }
     //
-    blocks
+    cfgs
 }
 
 // Given a sequence of blocks, generate a set of block groups.
-fn group(roots: HashMap<(usize,usize),String>, blocks: &[BlockSequence]) -> Vec<BlockGroup> {
+fn group(roots: HashMap<(usize,usize),String>, cfgs: &[ControlFlowGraph]) -> Vec<BlockGroup> {
     let mut groups = Vec::new();
     //
-    for (i,blk) in blocks.iter().enumerate() {
-        groups.extend(split(&roots,i,blk));
-    }
+    for cfg in cfgs { groups.extend(split(&roots,cfg)); }
     //
     groups
 }
 
 /// Split a given sequence of blocks (in the same code segment) upto
 /// into one or more groups.
-fn split(roots: &HashMap<(usize,usize),String>, id: usize, blocks: &BlockSequence) -> Vec<BlockGroup> {
-    let name = roots.get(&(id,0x00)).unwrap().clone();
-    // HACK FOR NOW
-    let grp = BlockGroup{id,name,blocks: blocks.clone().to_vec()};
-    // Done?
-    vec![grp]
+fn split(roots: &HashMap<(usize,usize),String>, cfg: &ControlFlowGraph) -> Vec<BlockGroup> {
+    let cid = cfg.cid();
+    let mut groups = Vec::new();
+    // Split out groups
+    for r in cfg.roots() {
+        let blocks = cfg.get_owned(*r);
+        let name = roots.get(&(cid,*r)).unwrap().clone();
+        groups.push(BlockGroup{id: cid, name, blocks, deps: Vec::new()});
+    }
+    // Add utility group (if applicable)
+    let remainder = determine_remainder(&groups,&cfg);
+    //
+    if remainder.len() > 0 {
+        // Yes, applicable
+        groups.push(BlockGroup{
+            id: cid,
+            name: "util".to_string(),
+            blocks: remainder,
+            deps: Vec::new()
+        });
+    }
+    // Determine dependencies
+    for i in 0..groups.len() {
+        groups[i].deps = dependencies(i,&groups, cfg);
+    }
+    //
+    groups
 }
+
+/// Calculate the dependencies for the `ith` group in a give set of
+/// groups.
+fn dependencies(i: usize, groups: &[BlockGroup], cfg: &ControlFlowGraph) -> Vec<usize> {
+    let ith = &groups[i];
+    let mut deps = Vec::new();
+    //
+    for j in 0..groups.len() {
+        let jth = &groups[j];
+        if i != j && touches_any(cfg,&ith.blocks,&jth.blocks) {
+            deps.push(j);
+        }
+    }
+    //
+    deps
+}
+
+/// Identify all blocks which have been allocated to a group.  These
+/// constitute the "remainder".  They are blocks which are not
+/// dominated by any root (except the entry) but are reachable by one
+/// or more internal roots.  As such, they need to be put into a
+/// catch-all utility file.
+fn determine_remainder(groups: &[BlockGroup], cfg: &ControlFlowGraph) -> Vec<Block> {
+    let mut blks = SortedVec::new();
+    // Initialise remainder
+    for b in cfg.blocks() { blks.insert(b.pc()); }
+    // Subtract everything allocated to a group
+    for g in groups {
+        for b in &g.blocks { blks.remove(&b.pc()); }
+    }
+    // Is there anything left?
+    let mut rem = Vec::new();
+    //
+    for b in cfg.blocks() {
+        if blks.contains(b.pc()) {
+            rem.push(b.clone());
+        }
+    }    
+    // Done
+    rem
+}
+
+/// Check whether any node from one set touches any other node in
+/// another set.
+fn touches_any(cfg: &ControlFlowGraph, from: &[Block], to: &[Block]) -> bool {
+    for f in from {
+        for t in to {
+            if cfg.touches(f.pc(),t.pc()) {
+                return true;
+            }
+        }
+    }
+    false
+}    
 
 /// Convert each block group into a sequence of one or more files
 /// using a given prefix.
 fn write_groups(prefix: &str, groups: Vec<BlockGroup>) -> Result<(), Box<dyn Error>> {
-    for g in groups {
+    for i in 0..groups.len() {
+        let g = &groups[i];
         let filename = format!("{prefix}_{}_{}.dfy",g.id,g.name);
         let header = format!("{prefix}_{}_header.dfy",g.id);        
         println!("Writing {filename}");
         let mut f = BufWriter::new(File::create(filename)?);
         writeln!(f,"include \"../evm-dafny/src/dafny/evm.dfy\"");
         writeln!(f,"include \"../evm-dafny/src/dafny/core/code.dfy\"");        
-        writeln!(f,"include \"{header}\"");                
+        writeln!(f,"include \"{header}\"");
+        for d in &g.deps {
+            let dep = format!("{prefix}_{}_{}.dfy",g.id,&groups[*d].name);
+            writeln!(f,"include \"{dep}\"");            
+        }
         writeln!(f,"");
         writeln!(f,"module {} {{",g.name);
         writeln!(f,"\timport opened Opcode");
         writeln!(f,"\timport opened Code");
         writeln!(f,"\timport opened Memory");
         writeln!(f,"\timport opened Bytecode");
-        writeln!(f,"\timport opened Header");        
+        writeln!(f,"\timport opened Header");
+        for d in &g.deps {
+            writeln!(f,"\timport opened {}",&groups[*d].name);            
+        }        
+        // Write out imports for dependencies
         writeln!(f,"");                
         // Construct block printer
         let mut printer = BlockPrinter::new(g.id,&mut f);
         //
-        for blk in g.blocks { printer.print_block(&blk); }
+        for blk in &g.blocks { printer.print_block(&blk); }
         writeln!(f,"}}");
     }
     Ok(())

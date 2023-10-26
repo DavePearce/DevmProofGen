@@ -20,7 +20,7 @@ pub enum Bytecode {
 /// Represents a basic block within a given sequence of instructions.
 /// All relevant information for generating the proof object is
 /// included.
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub struct Block {
     // The starting PC for this block
     pc: usize,
@@ -98,6 +98,10 @@ impl BlockSequence {
         Self{blocks}
     }
 
+    pub fn as_ref(&self) -> &[Block] {
+        &self.blocks
+    }
+    
     pub fn iter(&self) -> std::slice::Iter<Block> {
         self.blocks.iter()
     }
