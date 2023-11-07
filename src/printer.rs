@@ -62,7 +62,7 @@ impl<T:Write> BlockPrinter<T> {
             Some((v,w)) => {
                 if v >= 0x60 {
                     writeln!(self.out,"\t// Free memory pointer");                    
-                    write!(self.out,"\trequires Memory.Size(st'.evm.memory) >= 0x60 && ");                
+                    write!(self.out,"\trequires st'.MemSize() >= 0x60 && ");                
                     if v == w {
                         writeln!(self.out,"st'.Read(0x40) == {:#02x}",v);
                     } else {
