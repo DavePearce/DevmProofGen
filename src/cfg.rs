@@ -1,7 +1,7 @@
 use evmil::bytecode::{Assemble, Assembly, Instruction, StructuredSection};
 use evmil::analysis::{BlockGraph};
 use evmil::util::{dominators,SortedVec,transitive_closure};
-use crate::block::{Block,BlockSequence};
+use crate::block::{Block,BlockSequence,PreconditionFn};
 
 type DomSet = SortedVec<usize>;
 
@@ -28,7 +28,7 @@ pub struct ControlFlowGraph<'a> {
 }
 
 impl<'a> ControlFlowGraph<'a> {
-    pub fn new(cid: usize, blocksize: usize, insns: &'a [Instruction]) -> Self {
+    pub fn new(cid: usize, blocksize: usize, insns: &'a [Instruction], precheck: PreconditionFn) -> Self {
         // Construct graph
         let graph = BlockGraph::from(insns);
         // Compute dominators
@@ -36,7 +36,7 @@ impl<'a> ControlFlowGraph<'a> {
         // Compute transitive closure
         let reaches = transitive_closure(&graph);
         // Determine block decomposition based on the given block size.
-        let blocks = BlockSequence::from_insns(blocksize,insns);        
+        let blocks = BlockSequence::from_insns(blocksize,insns,precheck);        
         // Done
         Self{cid,graph,dominators,reaches,blocks, roots: Vec::new()}
     }
