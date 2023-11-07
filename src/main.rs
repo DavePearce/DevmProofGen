@@ -18,7 +18,7 @@ use evmil::bytecode::{Assemble, Assembly, Instruction, StructuredSection};
 use evmil::bytecode::Instruction::*;
 use evmil::util::{dominators,FromHexString,SortedVec,ToHexString};
 use analysis::{State};
-use block::{Block,BlockSequence};
+use block::{Block,BlockSequence,Bytecode};
 use cfg::ControlFlowGraph;
 use printer::*;
 
@@ -136,7 +136,7 @@ fn deconstruct(contract: &Assembly, blocksize: usize) -> Vec<ControlFlowGraph> {
     for (i,s) in contract.iter().enumerate() {
         match s {
             StructuredSection::Code(insns) => {
-                let cfg = ControlFlowGraph::new(i,blocksize,insns.as_ref());
+                let cfg = ControlFlowGraph::new(i,blocksize,insns.as_ref(), overflow_checks);
                 cfgs.push(cfg);
             }
             StructuredSection::Data(bytes) => {
@@ -333,9 +333,8 @@ fn write_external_call<T:Write>(mut f: T) {
 
 
 // ===================================================================
-
-type PreconditionFn = fn(&Instruction);
-
+// Helpers
+// ===================================================================
 
 fn infer_havoc_insns(mut asm: Assembly) -> Assembly {
     // This could probably be more efficient :)
@@ -354,13 +353,15 @@ fn infer_havoc_insns(mut asm: Assembly) -> Assembly {
 
 /// Add assertions to check against overflow / underflow in generated
 /// bytecode.
-fn overflow_checks(insn: &Instruction) {
-    match insn {
-        ADD => println!("\tassert (st.Peek(0) + st.Peek(1)) <= (MAX_U256 as u256);"),
-        MUL => println!("\tassert (st.Peek(0) * st.Peek(1)) <= (MAX_U256 as u256);"),
-        SUB => println!("\tassert st.Peek(1) <= st.Peek(0);"),
+fn overflow_checks(insn: &Instruction, codes: &mut Vec<Bytecode>) {
+    let s = match insn {
+        ADD => "assert (st.Peek(0) + st.Peek(1)) <= (MAX_U256 as u256);",
+        MUL => "assert (st.Peek(0) * st.Peek(1)) <= (MAX_U256 as u256);",
+        SUB => "assert st.Peek(1) <= st.Peek(0);",
         _ => {
-            // do nothing
+            // Do nothing in other cases
+            return;
         }
-    }    
+    };
+    codes.push(Bytecode::Raw(s.to_string()));
 }

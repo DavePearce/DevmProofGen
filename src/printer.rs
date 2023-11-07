@@ -6,7 +6,6 @@ use evmil::util::{ToHexString};
 use crate::block::{Bytecode,Block};
 use crate::analysis::*;
 use crate::opcodes::{OPCODES};
-use crate::PreconditionFn;
 
 /// Responsible for printing individual blocks to a given writer.
 /// What makes this complicated is that, at block boundaries, we want
@@ -206,6 +205,9 @@ impl<T:Write> BlockPrinter<T> {
                         writeln!(self.out,"\t\tst := PushN(st,{n},{});", hex)
                     }                    
                 };
+            }
+            Bytecode::Raw(s) => {
+                writeln!(self.out,"\t\t{s}");
             }            
             Bytecode::Swap(n) => {
                 writeln!(self.out,"\t\tst := Swap(st,{n});");

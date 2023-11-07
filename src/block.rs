@@ -8,6 +8,7 @@ use crate::opcodes::OPCODES;
 pub enum Bytecode {
     Call,
     Comment(String),
+    Raw(String),
     Unit(bool,&'static str),
     Push(Vec<u8>),
     Dup(u8),
@@ -93,8 +94,8 @@ pub struct BlockSequence {
 
 impl BlockSequence {
     /// Construct a block sequence from a given instruction sequence.
-    pub fn from_insns(n: usize, insns: &[Instruction]) -> Self {
-        let blocks = insns_to_blocks(n, insns);
+    pub fn from_insns(n: usize, insns: &[Instruction], precheck: PreconditionFn) -> Self {
+        let blocks = insns_to_blocks(n, insns, precheck);
         Self{blocks}
     }
 
@@ -115,11 +116,13 @@ impl BlockSequence {
 // Helpers
 // =============================================================================
 
+pub type PreconditionFn = fn(&Instruction,&mut Vec<Bytecode>);
+
 /// Decompose a given instruction sequence into a block sequence.
 /// This employs an abstract interpretation to determine various key
 /// pieces of information (e.g. jump targets, stack values, etc) at
 /// each point.
-fn insns_to_blocks(n: usize, insns: &[Instruction]) -> Vec<Block> {
+fn insns_to_blocks(n: usize, insns: &[Instruction], precheck: PreconditionFn) -> Vec<Block> {
     // Compute suplementary information needed for remainder.
     let analysis = BytecodeAnalysis::from_insns(insns);
     // Initially empty set of blocks.
@@ -132,7 +135,7 @@ fn insns_to_blocks(n: usize, insns: &[Instruction]) -> Vec<Block> {
     while n > 0 && index < insns.len() {
         let block : Block;
         // Process next block
-        (pc,index,block) = insns_to_block(n,pc,index,insns,&analysis);
+        (pc,index,block) = insns_to_block(n,pc,index,insns,&analysis,precheck);
         // Store processed block
         blocks.push(block);
     }
@@ -142,7 +145,7 @@ fn insns_to_blocks(n: usize, insns: &[Instruction]) -> Vec<Block> {
 
 /// Extract the next block starting at a given byte offset (and
 /// instruction offset) within the original sequence.
-fn insns_to_block(mut n: usize, mut pc: usize, index: usize, insns: &[Instruction], analysis: &BytecodeAnalysis) -> (usize,usize,Block) {
+fn insns_to_block(mut n: usize, mut pc: usize, index: usize, insns: &[Instruction], analysis: &BytecodeAnalysis, precheck: PreconditionFn) -> (usize,usize,Block) {
     let mut i = index;    
     // Extract abstract states at this position.
     let states = analysis.get_states(i).to_vec();
@@ -156,6 +159,8 @@ fn insns_to_block(mut n: usize, mut pc: usize, index: usize, insns: &[Instructio
         let mut bc : Bytecode;        
         // Insert debug information
         add_debug_info(&mut block,analysis.get_states(i));
+        // Insert any precondition checks
+        precheck(insn, &mut block.bytecodes);
         // Convert bytecode                
         match insn {
             JUMPDEST => {
