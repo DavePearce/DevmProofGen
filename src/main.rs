@@ -288,11 +288,14 @@ fn write_headers(devmdir: &str, prefix: &str, contract: &Assembly) -> Result<(),
                 println!("Writing {filename}");
                 let mut f = BufWriter::new(File::create(filename)?);
                 writeln!(f,"include \"{devmdir}/src/dafny/evm.dfy\"")?;
-                writeln!(f,"include \"{devmdir}/src/dafny/state.dfy\"")?;                
+                writeln!(f,"include \"{devmdir}/src/dafny/state.dfy\"")?;               
                 writeln!(f,"")?;
                 writeln!(f,"module Header {{")?;
                 writeln!(f,"\timport opened Int");
-                writeln!(f,"\timport EvmState");                
+                writeln!(f,"\timport EvmState");
+                writeln!(f,"");                                
+                writeln!(f,"\ttype u256 = Int.u256");
+                writeln!(f,"\tconst MAX_U256 : nat := Int.MAX_U256");
                 writeln!(f,"");                
                 write_bytecode(&mut f, insns, i);
                 // for now
