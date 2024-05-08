@@ -94,7 +94,7 @@ pub static OPCODES: &'static [&'static str] = &[
     "RJump",          //                 0x5c
     "RJumpI",         //                 0x5d
     "",               //                 0x5e
-    "",               //                 0x5f
+    "Push0",          //                 0x5f
     "Push1",          //            0x60
     "Push2",          //            0x61
     "Push3",          //            0x62
