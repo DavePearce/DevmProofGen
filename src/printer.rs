@@ -175,6 +175,9 @@ impl<T:Write> BlockPrinter<T> {
     fn print_code(&mut self, code: &Bytecode) {
         //
         match code {
+            Bytecode::Assert(uses,s) => {
+                writeln!(self.out,"\t\tassert {s};");
+            }            
             Bytecode::Comment(s) => {
                 writeln!(self.out,"\t\t// {s}");
             }
@@ -183,9 +186,6 @@ impl<T:Write> BlockPrinter<T> {
             }
             Bytecode::JumpI(targets) => {
                 self.print_jumpi(targets);
-            }
-            Bytecode::Raw(s) => {
-                writeln!(self.out,"\t\t{s}");
             }
             Bytecode::Unit(CALL) => {
                 self.print_call();

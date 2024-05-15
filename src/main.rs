@@ -358,13 +358,13 @@ fn infer_havoc_insns(mut asm: Assembly) -> Assembly {
 /// bytecode.
 fn overflow_checks(insn: &Instruction, codes: &mut Vec<Bytecode>) {
     let s = match insn {
-        ADD => "assert (st.Peek(0) + st.Peek(1)) <= (MAX_U256 as u256);",
-        MUL => "assert (st.Peek(0) * st.Peek(1)) <= (MAX_U256 as u256);",
-        SUB => "assert st.Peek(1) <= st.Peek(0);",
+        ADD => "(st.Peek(0) + st.Peek(1)) <= (MAX_U256 as u256)",
+        MUL => "(st.Peek(0) * st.Peek(1)) <= (MAX_U256 as u256)",
+        SUB => "st.Peek(1) <= st.Peek(0)",
         _ => {
             // Do nothing in other cases
             return;
         }
     };
-    codes.push(Bytecode::Raw(s.to_string()));
+    codes.push(Bytecode::Assert(vec![0,1],s.to_string()));
 }

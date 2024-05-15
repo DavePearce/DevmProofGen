@@ -7,7 +7,7 @@ use crate::opcodes::OPCODES;
 #[derive(Clone,Debug)]
 pub enum Bytecode {
     Comment(String),
-    Raw(String),
+    Assert(Vec<usize>,String),
     Unit(Instruction),
     JumpI(Vec<usize>),
     Jump(Vec<usize>)
