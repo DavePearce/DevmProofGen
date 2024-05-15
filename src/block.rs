@@ -9,7 +9,7 @@ pub enum Bytecode {
     Call,
     Comment(String),
     Raw(String),
-    Unit(bool,&'static str),
+    Unit(&'static str),
     Push(Vec<u8>),
     Dup(u8),
     Log(u8),    
@@ -171,7 +171,7 @@ fn insns_to_block(mut n: usize, mut pc: usize, index: usize, insns: &[Instructio
                     // cannot jump into the middle of a Dafny
                     // method!
                     let name = &OPCODES[insn.opcode() as usize];
-                    bc = Bytecode::Unit(false,name);
+                    bc = Bytecode::Unit(name);
                 } else {
                     // Indicates split is necessary.
                     block.next = Some(pc);
@@ -232,12 +232,12 @@ fn translate_insn(insn: &Instruction, mut done: bool, states: &[AbstractState]) 
         SWAP(n) =>  Bytecode::Swap(*n),
         DATA(bytes) => {
             done = true;
-            Bytecode::Unit(true,"Invalid")            
+            Bytecode::Unit("Invalid")            
         }
         _ => {
             let name = &OPCODES[insn.opcode() as usize];
             done = !insn.fallthru();
-            Bytecode::Unit(!insn.fallthru(),name)
+            Bytecode::Unit(name)
         }
     };
     (bc,done)

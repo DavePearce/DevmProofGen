@@ -212,7 +212,7 @@ impl<T:Write> BlockPrinter<T> {
             Bytecode::Swap(n) => {
                 writeln!(self.out,"\t\tst := Swap(st,{n});");
             }            
-            Bytecode::Unit(_,name) => {
+            Bytecode::Unit(name) => {
                 writeln!(self.out,"\t\tst := {name}(st);");                
             }
         };
