@@ -116,4 +116,9 @@ impl<'a> ControlFlowGraph<'a> {
         // Reachability check
         parent == child || self.reaches[gp].contains(gc)
     }
+
+    /// Minimise the information retained in this control-flow graph.
+    pub fn minimise(&mut self) {
+        self.blocks.minimise()
+    }
 }

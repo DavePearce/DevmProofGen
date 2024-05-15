@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     //let args: Vec<String> = env::args().collect();
     let matches = Command::new("devmpg")
         .about("DafnyEvm Proof Generation Tool")
-        .arg(Arg::new("overflow").long("overflows"))
+        .arg(Arg::new("overflow").long("overflows"))        
         .arg(Arg::new("blocksize")
              .long("blocksize")
              .value_name("SIZE")
@@ -34,12 +34,14 @@ fn main() -> Result<(), Box<dyn Error>> {
              .default_value("65535"))
         .arg(Arg::new("outdir").long("outdir").short('o').value_name("DIR"))
         .arg(Arg::new("devmdir").long("devmdir").value_name("DIR").default_value("evm-dafny"))
+        .arg(Arg::new("minimise").long("minimise"))        
         .arg(Arg::new("split").long("split").value_name("json-file"))
         .arg(Arg::new("target").required(true))        
         .get_matches();
     // Extract arguments
     let outdir : Option<&String> = matches.get_one("outdir");
     let overflows = matches.is_present("overflow");
+    let minimise = matches.is_present("minimise");    
     let blocksize : &usize = matches.get_one("blocksize").unwrap();
     let target = matches.get_one::<String>("target").unwrap();
     let devmdir = matches.get_one::<String>("devmdir").unwrap();
@@ -69,7 +71,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Infer havoc instructions
     contract = infer_havoc_insns(contract);
     // Deconstruct into sequences
-    let mut cfgs = deconstruct(&contract,*blocksize);
+    let mut cfgs = deconstruct(&contract,*blocksize,minimise);
     // Configure roots
     for (c,r) in roots.keys() {
         cfgs[*c].add_root(*r);
@@ -130,13 +132,14 @@ type DomSet = SortedVec<usize>;
 
 // Given an assembly, deconstruct it into a set of blocks of a given
 // maximum size.
-fn deconstruct(contract: &Assembly, blocksize: usize) -> Vec<ControlFlowGraph> {
+fn deconstruct(contract: &Assembly, blocksize: usize, minimise: bool) -> Vec<ControlFlowGraph> {
     let mut cfgs = Vec::new();
     //
     for (i,s) in contract.iter().enumerate() {
         match s {
             StructuredSection::Code(insns) => {
-                let cfg = ControlFlowGraph::new(i,blocksize,insns.as_ref(), overflow_checks);
+                let mut cfg = ControlFlowGraph::new(i,blocksize,insns.as_ref(), overflow_checks);
+                if minimise { cfg.minimise(); }
                 cfgs.push(cfg);
             }
             StructuredSection::Data(bytes) => {
