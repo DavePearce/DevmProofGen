@@ -6,14 +6,9 @@ use crate::opcodes::OPCODES;
 
 #[derive(Clone,Debug)]
 pub enum Bytecode {
-    Call,
     Comment(String),
     Raw(String),
-    Unit(bool,&'static str),
-    Push(Vec<u8>),
-    Dup(u8),
-    Log(u8),    
-    Swap(u8),
+    Unit(Instruction),
     JumpI(Vec<usize>),
     Jump(Vec<usize>)
 }
@@ -170,8 +165,7 @@ fn insns_to_block(mut n: usize, mut pc: usize, index: usize, insns: &[Instructio
                     // instruction of a block.  This is because we
                     // cannot jump into the middle of a Dafny
                     // method!
-                    let name = &OPCODES[insn.opcode() as usize];
-                    bc = Bytecode::Unit(false,name);
+                    bc = Bytecode::Unit(insn.clone());
                 } else {
                     // Indicates split is necessary.
                     block.next = Some(pc);
@@ -203,10 +197,8 @@ fn add_debug_info(block: &mut Block, states: &[AbstractState]) {
 
 fn translate_insn(insn: &Instruction, mut done: bool, states: &[AbstractState]) -> (Bytecode,bool) {
     let bc = match insn {
-        CALL => Bytecode::Call,
         CALLCODE => todo!(),
         DELEGATECALL => todo!(),        
-        DUP(n) => Bytecode::Dup(*n),
         HAVOC(n) => {
             // Virtual instructions
             Bytecode::Comment(format!("Havoc {n}"))
@@ -225,19 +217,16 @@ fn translate_insn(insn: &Instruction, mut done: bool, states: &[AbstractState]) 
             // 
             Bytecode::Jump(targets)                    
         }
-        LOG(n) =>  Bytecode::Log(*n),            
-        PUSH(bytes) => { Bytecode::Push(bytes.clone()) }
         RJUMPI(_)|RJUMP(_) => { todo!() }
         STATICCALL => todo!(),        
-        SWAP(n) =>  Bytecode::Swap(*n),
+        //SWAP(_) =>  Bytecode::Unit(insn.clone()),
         DATA(bytes) => {
             done = true;
-            Bytecode::Unit(true,"Invalid")            
+            Bytecode::Unit(insn.clone())            
         }
         _ => {
-            let name = &OPCODES[insn.opcode() as usize];
             done = !insn.fallthru();
-            Bytecode::Unit(!insn.fallthru(),name)
+            Bytecode::Unit(insn.clone())
         }
     };
     (bc,done)

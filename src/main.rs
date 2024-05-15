@@ -204,8 +204,8 @@ fn dependencies(i: usize, groups: &[BlockGroup], cfg: &ControlFlowGraph) -> Vec<
     deps
 }
 
-/// Identify all blocks which have been allocated to a group.  These
-/// constitute the "remainder".  They are blocks which are not
+/// Identify all blocks which have not been allocated to a group.
+/// These constitute the "remainder".  They are blocks which are not
 /// dominated by any root (except the entry) but are reachable by one
 /// or more internal roots.  As such, they need to be put into a
 /// catch-all utility file.

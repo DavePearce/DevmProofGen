@@ -175,25 +175,28 @@ impl<T:Write> BlockPrinter<T> {
     fn print_code(&mut self, code: &Bytecode) {
         //
         match code {
-            Bytecode::Call => {
-                self.print_call();
-            }
             Bytecode::Comment(s) => {
                 writeln!(self.out,"\t\t// {s}");
             }
-            Bytecode::Dup(n) => {
-                writeln!(self.out,"\t\tst := Dup(st,{n});");                                     
-            }
-            Bytecode::Log(n) => {
-                writeln!(self.out,"\t\tst := LogN(st,{n});");                                     
-            }            
             Bytecode::Jump(targets) => {
                 self.print_jump(targets);
             }
             Bytecode::JumpI(targets) => {
                 self.print_jumpi(targets);
             }
-            Bytecode::Push(bytes) => {
+            Bytecode::Raw(s) => {
+                writeln!(self.out,"\t\t{s}");
+            }
+            Bytecode::Unit(CALL) => {
+                self.print_call();
+            }            
+            Bytecode::Unit(DUP(n)) => {
+                writeln!(self.out,"\t\tst := Dup(st,{n});");                                     
+            }            
+            Bytecode::Unit(LOG(n)) => {
+                writeln!(self.out,"\t\tst := LogN(st,{n});");                                     
+            }
+            Bytecode::Unit(PUSH(bytes)) => {
                 let n = bytes.len();
                 let hex = bytes.to_hex_string();
                 match n {
@@ -205,14 +208,12 @@ impl<T:Write> BlockPrinter<T> {
                         writeln!(self.out,"\t\tst := PushN(st,{n},{});", hex)
                     }                    
                 };
-            }
-            Bytecode::Raw(s) => {
-                writeln!(self.out,"\t\t{s}");
             }            
-            Bytecode::Swap(n) => {
+            Bytecode::Unit(SWAP(n)) => {
                 writeln!(self.out,"\t\tst := Swap(st,{n});");
             }            
-            Bytecode::Unit(_,name) => {
+            Bytecode::Unit(insn) => {
+                let name = &OPCODES[insn.opcode() as usize];                
                 writeln!(self.out,"\t\tst := {name}(st);");                
             }
         };
