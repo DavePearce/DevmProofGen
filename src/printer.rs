@@ -1,9 +1,9 @@
 use std::io::Write;
 use evmil::bytecode::{Assemble,Instruction};
 use evmil::bytecode::Instruction::*;
-use evmil::util::{ToHexString};
+use evmil::util::{ToHexString,w256};
 
-use crate::block::{Bytecode,Block};
+use crate::block::{Bytecode,Block,BlockState};
 use crate::analysis::*;
 use crate::opcodes::{OPCODES};
 
@@ -27,7 +27,7 @@ impl<T:Write> BlockPrinter<T> {
         // Print standard requires
         writeln!(self.out,"\trequires st'.evm.code == Code.Create(BYTECODE_{})",self.id);
         writeln!(self.out,"\trequires st'.WritesPermitted() && st'.PC() == {:#06x}",block.pc());
-        if block.states().len() == 0 {
+        if block.entry_states().len() == 0 {
             // Deadcode
             writeln!(self.out,"\t// Deadcode");            
             writeln!(self.out,"\trequires false");
@@ -37,7 +37,9 @@ impl<T:Write> BlockPrinter<T> {
         }
         writeln!(self.out,"\t{{");
         writeln!(self.out,"\t\tvar st := st';");
-        for code in block.iter() {
+        for (i,code) in block.iter().enumerate() {
+            let state = block.state(i);
+            self.print_debug_info(state);
             self.print_code(code);
         }
         match block.next() {
@@ -78,7 +80,7 @@ impl<T:Write> BlockPrinter<T> {
         writeln!(self.out,"\t// Stack height(s)");
         self.print_stack_heights(block);
         // Determine constant items
-        let join = join_states(block.states());
+        let join = block.entry_state();
         // Print static items
         self.print_static_stack_requires(&join);
         // Print dynamic items
@@ -111,7 +113,7 @@ impl<T:Write> BlockPrinter<T> {
     fn print_dynamic_stack_requires(&mut self, block: &Block, join: &AbstractState) {
         let (min,max) = block.stack_bounds();                
         // Decompose states        
-        let stacked = stacked_states(block.states(),join,max+1);        
+        let stacked = stacked_states(block.entry_states(),join,max+1);        
         //
         for (sh,sts) in stacked.iter().enumerate() {
             if min <= sh && is_useful(&sts) {
@@ -171,6 +173,52 @@ impl<T:Write> BlockPrinter<T> {
         }
         write!(self.out,")");        
     }
+
+    fn print_debug_info(&mut self, state: &BlockState) -> std::io::Result<()> {
+        for s in state.states() {
+            write!(self.out,"\t\t//");            
+            write!(self.out,"|")?;                
+            // Write freemem ptr
+            match s.freemem_ptr() {
+                Some(w) => { write!(self.out,"fp={w:#06x}"); }
+                None => {}
+            }       
+            write!(self.out,"|")?;
+            // Write stack
+            for (i,av) in s.stack().iter().enumerate() {
+                if i != 0 { write!(self.out,",")?; }
+                match av {
+                    Some(w) => { self.write_w256(w)?; }
+                    None => {write!(self.out,"_")?;}
+                }
+                if state.necessary_stack_item(i) {
+                    write!(self.out,"*")?;
+                }
+            }
+            writeln!(self.out,"|")?;        
+        }
+        Ok(())        
+    }
+
+    // FIXME: this was cloned from analysis.  I couldn't figure out
+    // how to reuse it.
+    fn write_w256(&mut self, w:&w256) -> std::io::Result<()> {
+        let mut first = true;
+        write!(self.out,"0x")?;
+        // Following is necessary because ruint::Uint doesn't
+        // appear to play nicely with formatting hexadecimal.                
+        for l in w.as_limbs().iter().rev() {
+            if *l != 0 || !first {
+                write!(self.out,"{l:02x}")?;
+                first = false;
+            }
+        }
+        if first {
+            write!(self.out,"00")?;
+        }
+        Ok(())
+    }
+    
     
     fn print_code(&mut self, code: &Bytecode) {
         //
@@ -270,17 +318,6 @@ impl<T:Write> BlockPrinter<T> {
         writeln!(self.out,"\t\t}}");
     }
     
-}
-
-/// Determine items which are constant across all stack states.
-fn join_states(states: &[AbstractState]) -> AbstractState {
-    let mut r = states[0].clone();
-    //
-    for i in 1..states.len() {
-        r.join(&states[i]);
-    }
-    //
-        r
 }
 
 fn stacked_states(states: &[AbstractState], join: &AbstractState, n:usize) -> Vec<Vec<AbstractState>> {

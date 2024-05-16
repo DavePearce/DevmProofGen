@@ -21,10 +21,8 @@ pub enum Bytecode {
 pub struct Block {
     // The starting PC for this block
     pc: usize,
-    // Set of state frames on entry
-    states: Vec<AbstractState>,
-    // Identifies what's necessary for each state.
-    necessary: MinimiseState,
+    // States before each bytecode.
+    states: Vec<BlockState>,
     // The set of bytecodes
     bytecodes: Vec<Bytecode>,
     // Fall-thru (if applicable)
@@ -34,73 +32,45 @@ pub struct Block {
 impl Block {
     pub fn pc(&self) -> usize {
         self.pc
-    }    
-    pub fn states(&self) -> &[AbstractState] {
+    }
+    pub fn state(&self, i: usize) -> &BlockState {
+        &self.states[i]
+    }
+    pub fn states(&self) -> &[BlockState] {
         &self.states
     }
+    pub fn entry_states(&self) -> &[AbstractState] {
+        &self.states[0].states
+    }    
     pub fn bytecodes(&self) -> &[Bytecode] {
         &self.bytecodes
     }
-    pub fn clear_stack_item(&mut self, index: usize) {
-        for s in &mut self.states {
-            s.clear_stack_item(index);
-        }
-    }
-    pub fn necessary_stack_item(&self, index: usize) -> bool {
-        self.necessary.get(index)
-    }
+    // Determine stack bounds on entry to this block.
     pub fn stack_bounds(&self) -> (usize,usize) {
-        let mut min = usize::MAX;
-        let mut max = 0;
-        // 
-        for s in &self.states {    
-            min = min.min(s.stack().len());
-            max = max.max(s.stack().len());        
-        }
-        //
-        (min,max)        
+        self.states[0].stack_bounds()
     }
+    // Determine stack heights on entry to this block.
     pub fn stack_heights(&self) -> Vec<usize> {
-        let mut hs = Vec::new();
-        for s in &self.states {
-            hs.push(s.stack().len());
-        }
-        hs.sort();
-        hs.dedup();
-        hs
+        self.states[0].stack_heights()
     }
+    // Determine freememory pointer bounds on entry to this block.
     pub fn freemem_ptrs(&self) -> Option<(usize,usize)> {
-        let mut min = usize::MAX;
-        let mut max = 0;
-        // 
-        for s in &self.states {
-            match s.freemem_ptr() {
-                Some(p) => {
-                    min = min.min(p);
-                    max = max.max(p);
-                }
-                None => { return None; }
-            }
-        }
-        //
-        Some((min,max))
+        self.states[0].freemem_ptr_bounds()
     }
     pub fn next(&self) -> Option<usize> { self.next }
+
     pub fn iter(&self) -> std::slice::Iter<Bytecode> {
         self.bytecodes.iter()
     }
+    
+    pub fn entry_state(&self) -> AbstractState {
+        self.states[0].join_states()
+    }
     /// Minimise block information to contain only that which is
     /// deemed "necessary".
-    pub fn minimise(&mut self) {        
-        // Determine max stack height
-        let (_,height) = self.stack_bounds();
-        //
-        for i in 0..height {
-            // Check whether ith stack item is necessary (or not).
-            if !self.necessary.get(i) {
-                // Its not necessary, so clear it.
-                self.clear_stack_item(i);
-            } 
+    pub fn minimise(&mut self) {
+        for s in &mut self.states {
+            s.minimise()
         }
     }
 }
@@ -119,7 +89,7 @@ impl BlockSequence {
         determine_necessary_stateinfo(&mut blocks);
         Self{blocks}
     }
-
+    
     pub fn as_ref(&self) -> &[Block] {
         &self.blocks
     }
@@ -136,6 +106,96 @@ impl BlockSequence {
         // Do it.
         for i in 0..self.blocks.len() {
             self.blocks[i].minimise();
+        }
+    }
+}
+
+/// Contains information relevant to a given block during the
+/// minimisation procedure.
+#[derive(Clone,Debug)]
+pub struct BlockState {
+    states: Vec<AbstractState>,    
+    necessary: NecessaryState
+}
+
+impl BlockState {
+    pub fn new(states: Vec<AbstractState>) -> Self {
+        Self{states, necessary: NecessaryState::new()}
+    }
+
+    pub fn states(&self) -> &[AbstractState] {
+        &self.states
+    }
+    
+    pub fn stack_bounds(&self) -> (usize,usize) {
+        let mut min = usize::MAX;
+        let mut max = 0;
+        // 
+        for s in &self.states {    
+            min = min.min(s.stack().len());
+            max = max.max(s.stack().len());        
+        }
+        //
+        (min,max)        
+    }
+
+    pub fn stack_heights(&self) -> Vec<usize> {
+        let mut hs = Vec::new();
+        for s in &self.states {
+            hs.push(s.stack().len());
+        }
+        hs.sort();
+        hs.dedup();
+        hs
+    }
+
+    pub fn freemem_ptr_bounds(&self) -> Option<(usize,usize)> {
+        let mut min = usize::MAX;
+        let mut max = 0;
+        // 
+        for s in &self.states {
+            match s.freemem_ptr() {
+                Some(p) => {
+                    min = min.min(p);
+                    max = max.max(p);
+                }
+                None => { return None; }
+            }
+        }
+        //
+        Some((min,max))
+    }
+
+    pub fn necessary_stack_item(&self, item: usize) -> bool {
+        self.necessary.get(item)
+    }
+    
+    pub fn join_states(&self) -> AbstractState {
+        let mut r = self.states[0].clone();
+        //
+        for i in 1..self.states.len() {
+            r.join(&self.states[i]);
+        }
+        //
+        r
+    }
+
+    pub fn clear_stack_item(&mut self, item: usize) {
+        for s in &mut self.states {
+            s.clear_stack_item(item);
+        }
+    }
+    
+    pub fn minimise(&mut self) {
+        // Determine max stack height
+        let (_,height) = self.stack_bounds();
+        //
+        for i in 0..height {
+            // Check whether ith stack item is necessary (or not).
+            if !self.necessary.get(i) {
+                // Its not necessary, so clear it.
+                self.clear_stack_item(i);
+            } 
         }
     }
 }
@@ -175,19 +235,14 @@ fn insns_to_blocks(n: usize, insns: &[Instruction], precheck: PreconditionFn) ->
 /// instruction offset) within the original sequence.
 fn insns_to_block(mut n: usize, mut pc: usize, index: usize, insns: &[Instruction], analysis: &BytecodeAnalysis, precheck: PreconditionFn) -> (usize,usize,Block) {
     let mut i = index;    
-    // Extract abstract states at this position.
-    let states = analysis.get_states(i).to_vec();
-    let necessary = MinimiseState::new();
     // Construct (initially) empty block
-    let mut block = Block{pc,states,necessary,bytecodes: Vec::new(),next: None};
+    let mut block = Block{pc,states: Vec::new(), bytecodes: Vec::new(),next: None};
     // Flag to signal early exit
     let mut done = false;
     // Travese block to its end
     while !done && i < insns.len() && n > 0 {
         let insn = &insns[i];
-        let mut bc : Bytecode;        
-        // Insert debug information
-        add_debug_info(&mut block,analysis.get_states(i));
+        let mut bc : Bytecode;
         // Insert any precondition checks
         precheck(insn, &mut block.bytecodes);
         // Convert bytecode                
@@ -212,6 +267,12 @@ fn insns_to_block(mut n: usize, mut pc: usize, index: usize, insns: &[Instructio
             }
         };
         block.bytecodes.push(bc);
+        // Account for any added bytecodes
+        while block.states.len() < block.bytecodes.len() {
+            let mut ith_states = analysis.get_states(i).to_vec();                
+            block.states.push(BlockState::new(ith_states));        
+        }
+        //
         pc += insn.length();
         i += 1;
         n -= 1;
@@ -220,13 +281,6 @@ fn insns_to_block(mut n: usize, mut pc: usize, index: usize, insns: &[Instructio
     if n == 0 && !done { block.next = Some(pc); }    
     // Done
     (pc,i,block)
-}
-
-fn add_debug_info(block: &mut Block, states: &[AbstractState]) {
-    for s in states {
-        let bc = Bytecode::Comment(format!("{}",s));
-        block.bytecodes.push(bc);
-    }
 }
 
 fn translate_insn(insn: &Instruction, mut done: bool, states: &[AbstractState]) -> (Bytecode,bool) {
@@ -290,16 +344,13 @@ fn jump_targets(states: &[AbstractState]) -> Vec<usize> {
 /// Contains information relevant to a given block during the
 /// minimisation procedure.
 #[derive(Clone,Debug)]
-struct MinimiseState {
-    // State of the stack on entry.
-    stack: Vec<bool>
-}
+struct NecessaryState { stack: Vec<bool> }
 
-impl MinimiseState {
+impl NecessaryState {
     pub fn new() -> Self {
         Self{stack: Vec::new()}
     }
-
+    
     // Check whether the given stack item was used or not.
     pub fn get(&self, index: usize) -> bool {
 	let n = self.stack.len();	
@@ -360,33 +411,31 @@ fn determine_necessary_stateinfo(blocks: &mut [Block]) {
     }
     // Iterative dataflow analysis algorithm :)
     let mut changed = true;
-    let mut count = 0;
     while changed {
-	println!("ITERATING: {count}");
-	count+=1;
         changed = false;        
         // Iterate backwards
-        for i in 0..n {
-            let blk = &blocks[n-1-i];
+        for i in (0..n).into_iter().rev() {
             // Determine incoming state
-            let mut state = match blk.next() {
-                None => MinimiseState::new(),
+            let mut state = match blocks[i].next() {
+                None => NecessaryState::new(),
                 Some(pc) => {
-                    blocks[*offsets.get(&pc).unwrap()].necessary.clone()
+                    blocks[*offsets.get(&pc).unwrap()].states[0].necessary.clone()
                 }
             };
             // Iterate bytecodes in reverse
-            for b in blk.bytecodes().iter().rev() {
+            let m = blocks[i].bytecodes().len();
+            for j in (0..m).into_iter().rev() {
+                let b = &blocks[i].bytecodes[j];
                 // Apply effect of bytecode (in reverse)
                 state = transfer_bytecode(b,state,&blocks,&offsets);
+                // Now merge it in
+                changed |= blocks[i].states[j].necessary.join(&state);                
             }
-            // Now merge it in
-            changed |= blocks[i].necessary.join(&state);
         }
     }
 }
 
-fn transfer_bytecode(bytecode: &Bytecode, mut state: MinimiseState, blocks: &[Block], offsets: &HashMap<usize,usize>) -> MinimiseState {
+fn transfer_bytecode(bytecode: &Bytecode, mut state: NecessaryState, blocks: &[Block], offsets: &HashMap<usize,usize>) -> NecessaryState {
     match bytecode {
 	Bytecode::Comment(_) => { state }
 	Bytecode::Assert(deps,_) => {
@@ -428,8 +477,8 @@ fn transfer_bytecode(bytecode: &Bytecode, mut state: MinimiseState, blocks: &[Bl
 	Bytecode::JumpI(targets) => {
 	    let targets = merge_target_states(targets,blocks,offsets);
 	    state.join(&targets);
-	    state.push(true); // target pc
 	    state.push(false); // condition
+	    state.push(true); // target pc            
 	    state
 	}
 	Bytecode::Jump(targets) => {
@@ -441,12 +490,12 @@ fn transfer_bytecode(bytecode: &Bytecode, mut state: MinimiseState, blocks: &[Bl
     }
 }
 
-fn merge_target_states(targets: &[usize], blocks: &[Block], offsets: &HashMap<usize,usize>) -> MinimiseState {
-    let mut state = MinimiseState::new();
+fn merge_target_states(targets: &[usize], blocks: &[Block], offsets: &HashMap<usize,usize>) -> NecessaryState {
+    let mut state = NecessaryState::new();
     
     for pc in targets {
 	let bid = offsets.get(pc).unwrap();
-	state.join(&blocks[*bid].necessary);
+	state.join(&blocks[*bid].states[0].necessary);
     }
     // done
     state
@@ -473,7 +522,7 @@ fn insn_produces(insn: &Instruction) -> usize {
         MSIZE|PC|GAS|MLOAD|SLOAD => 1,
 	JUMPDEST|POP|JUMP|JUMPI|SSTORE|MSTORE|MSTORE8 => 0,     
         // 60s & 70s: Push Operations            
-        PUSH(_) => 1,
+        PUSH0|PUSH(_) => 1,
         // 80s: Duplication Operations
         DUP(_) => 1,
         // 90s: Swap Operations

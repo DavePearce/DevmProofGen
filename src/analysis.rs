@@ -127,7 +127,7 @@ impl fmt::Display for AbstractState {
     }        
 }
 
-fn write_w256(f: &mut fmt::Formatter, w:&w256) -> fmt::Result {
+pub fn write_w256(f: &mut fmt::Formatter, w:&w256) -> fmt::Result {
     let mut first = true;
     write!(f,"0x")?;
     // Following is necessary because ruint::Uint doesn't
