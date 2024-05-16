@@ -35,6 +35,11 @@ impl AbstractState {
     pub fn stack(&self) -> &[Option<w256>] {
         &self.stack_frame            
     }
+    pub fn clear_stack_item(&mut self, index: usize) {
+        if index < self.stack_frame.len() {
+            self.stack_frame[index] = None;
+        }
+    }
     fn extract_fmp(state: &State) -> Option<usize> {
         let fmp = aw256::from(w256::from(0x40));
         // NOTE: this is a hack to work around the lack of an
@@ -122,7 +127,7 @@ impl fmt::Display for AbstractState {
     }        
 }
 
-fn write_w256(f: &mut fmt::Formatter, w:&w256) -> fmt::Result {
+pub fn write_w256(f: &mut fmt::Formatter, w:&w256) -> fmt::Result {
     let mut first = true;
     write!(f,"0x")?;
     // Following is necessary because ruint::Uint doesn't
