@@ -36,7 +36,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .arg(Arg::new("devmdir").long("devmdir").value_name("DIR").default_value("evm-dafny"))
         .arg(Arg::new("debug").long("debug"))	
         .arg(Arg::new("minimise").long("minimise"))
-        .arg(Arg::new("minimise-all").long("minimise-all"))	
+        .arg(Arg::new("minimise-all").long("minimise-all"))
+	.arg(Arg::new("masks").long("masks"))
         .arg(Arg::new("split").long("split").value_name("json-file"))
         .arg(Arg::new("target").required(true))        
         .get_matches();
@@ -50,6 +51,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 	checks: overflow_checks, // for now
 	blocksize: *matches.get_one("blocksize").unwrap(),
 	debug: matches.is_present("debug"),
+	masks: matches.is_present("masks"),
 	minimise_requires: matches.is_present("minimise")||matches.is_present("minimise-all"),
 	minimise_internal: matches.is_present("minimise-all"),
     };
@@ -128,6 +130,8 @@ struct Config {
     /// Signals whether or not to generate debug information around
     /// minimisation.
     debug: bool,
+    /// Signals whether or not to employ "and masks".
+    masks: bool,    
     /// Signals whether or not to use mimimisation on `requires`
     /// clauses.
     minimise_requires: bool,
@@ -344,11 +348,15 @@ fn write_headers(contract: &Assembly, settings: &Config) -> Result<(), Box<dyn E
                 // for now
                 write_external_call(&mut f);
 		// Write custom masking implementations
-		write_and_mask(&mut f, 1);
-		write_and_mask(&mut f, 5);
-		write_and_mask(&mut f, 8);
-		write_and_mask(&mut f, 32);		
-		write_and_mask(&mut f, 160);
+		if settings.masks {
+		    write_and_mask(&mut f, 1);
+		    write_and_mask(&mut f, 5);
+		    write_and_mask(&mut f, 8);
+		    write_and_mask(&mut f, 32);
+		    write_and_mask(&mut f, 64);
+		    write_and_mask(&mut f, 128);
+		    write_and_mask(&mut f, 160);
+		}
                 writeln!(f,"}}")?;
             }
             StructuredSection::Data(bytes) => {
