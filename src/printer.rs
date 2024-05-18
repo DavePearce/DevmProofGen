@@ -3,6 +3,7 @@ use evmil::bytecode::{Assemble,Instruction};
 use evmil::bytecode::Instruction::*;
 use evmil::util::{ToHexString,w256};
 
+use crate::Config;
 use crate::block::{Bytecode,Block,BlockState};
 use crate::analysis::*;
 use crate::opcodes::{OPCODES};
@@ -11,14 +12,15 @@ use crate::opcodes::{OPCODES};
 /// What makes this complicated is that, at block boundaries, we want
 /// to extract known information and include that in the `requires`
 /// clause of the corresponding Dafny method.
-pub struct BlockPrinter<T:Write> {
+pub struct BlockPrinter<'a,T:Write> {
     id: usize,
-    out: T
+    out: T,
+    settings: &'a Config
 }
 
-impl<T:Write> BlockPrinter<T> {
-    pub fn new(id: usize, out: T) -> Self {
-        Self{id,out}
+impl<'a,T:Write> BlockPrinter<'a,T> {
+    pub fn new(id: usize, out: T, settings: &'a Config) -> Self {
+        Self{id,out,settings}
     }
     
     pub fn print_block(&mut self, block: &Block) {
@@ -27,7 +29,7 @@ impl<T:Write> BlockPrinter<T> {
         // Print standard requires
         writeln!(self.out,"\trequires st'.evm.code == Code.Create(BYTECODE_{})",self.id);
         writeln!(self.out,"\trequires st'.WritesPermitted() && st'.PC() == {:#06x}",block.pc());
-        if block.entry_states().len() == 0 {
+        if block.is_unreachable() {
             // Deadcode
             writeln!(self.out,"\t// Deadcode");            
             writeln!(self.out,"\trequires false");
@@ -76,15 +78,20 @@ impl<T:Write> BlockPrinter<T> {
     }
     
     fn print_stack_requires(&mut self, block: &Block) {
+	let mut block = block.clone();
+	// Minimise block information (if applicable)
+	if self.settings.minimise_requires {
+	    block.minimise();
+	}
         // Generic stack bounds
         writeln!(self.out,"\t// Stack height(s)");
-        self.print_stack_heights(block);
+        self.print_stack_heights(&block);
         // Determine constant items
         let join = block.entry_state();
         // Print static items
         self.print_static_stack_requires(&join);
         // Print dynamic items
-        self.print_dynamic_stack_requires(block,&join);
+        self.print_dynamic_stack_requires(&block,&join);
     }
 
     fn print_stack_heights(&mut self, block: &Block) {
@@ -111,9 +118,9 @@ impl<T:Write> BlockPrinter<T> {
     }        
     
     fn print_dynamic_stack_requires(&mut self, block: &Block, join: &AbstractState) {
-        let (min,max) = block.stack_bounds();                
+        let (min,max) = block.stack_bounds();
         // Decompose states        
-        let stacked = stacked_states(block.entry_states(),join,max+1);        
+        let stacked = block_stacked_states(block,join,max+1);        
         //
         for (sh,sts) in stacked.iter().enumerate() {
             if min <= sh && is_useful(&sts) {
@@ -175,6 +182,11 @@ impl<T:Write> BlockPrinter<T> {
     }
 
     fn print_debug_info(&mut self, state: &BlockState) -> std::io::Result<()> {
+	let mut state = state.clone();
+	// Minimiase this state (if applicable)
+	if self.settings.minimise_internal {
+	    state.minimise();
+	}
         for s in state.states() {
             write!(self.out,"\t\t//");            
             write!(self.out,"|")?;                
@@ -191,7 +203,7 @@ impl<T:Write> BlockPrinter<T> {
                     Some(w) => { self.write_w256(w)?; }
                     None => {write!(self.out,"_")?;}
                 }
-                if state.necessary_stack_item(i) {
+                if self.settings.debug && state.necessary_stack_item(i) {
                     write!(self.out,"*")?;
                 }
             }
@@ -320,16 +332,17 @@ impl<T:Write> BlockPrinter<T> {
     
 }
 
-fn stacked_states(states: &[AbstractState], join: &AbstractState, n:usize) -> Vec<Vec<AbstractState>> {
+fn block_stacked_states(block: &Block, join: &AbstractState, n:usize) -> Vec<Vec<AbstractState>> {
     let mut stack = vec![Vec::new(); n];
-    for s in states {
+    // Stack states
+    for s in block.entry_states() {
         let sh = s.stack().len();
         let mut ns = s.clone();
         assert!(ns.stack().len() >= join.stack().len());
         ns.cancel(join);
         stack[sh].push(ns);
     }
-    stack
+    stack    
 }
 
 /// Check no state in a given set of states offers no value.  That is

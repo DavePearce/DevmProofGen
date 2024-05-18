@@ -57,6 +57,12 @@ impl Block {
     pub fn freemem_ptrs(&self) -> Option<(usize,usize)> {
         self.states[0].freemem_ptr_bounds()
     }
+    // Check whether this block is reachable. More specifically,
+    // whether or not it was reached during the flow analysis.
+    pub fn is_unreachable(&self) -> bool {
+	// Block is unreachable if it contains no initial states.
+	self.states[0].states.len() == 0
+    }
     pub fn next(&self) -> Option<usize> { self.next }
 
     pub fn iter(&self) -> std::slice::Iter<Bytecode> {

@@ -18,7 +18,7 @@ use evmil::bytecode::{Assemble, Assembly, Instruction, StructuredSection};
 use evmil::bytecode::Instruction::*;
 use evmil::util::{dominators,FromHexString,SortedVec,ToHexString};
 use analysis::{State};
-use block::{Block,BlockSequence,Bytecode};
+use block::{Block,BlockSequence,Bytecode,PreconditionFn};
 use cfg::ControlFlowGraph;
 use printer::*;
 
@@ -34,23 +34,31 @@ fn main() -> Result<(), Box<dyn Error>> {
              .default_value("65535"))
         .arg(Arg::new("outdir").long("outdir").short('o').value_name("DIR"))
         .arg(Arg::new("devmdir").long("devmdir").value_name("DIR").default_value("evm-dafny"))
-        .arg(Arg::new("minimise").long("minimise"))        
+        .arg(Arg::new("debug").long("debug"))	
+        .arg(Arg::new("minimise").long("minimise"))
+        .arg(Arg::new("minimise-all").long("minimise-all"))	
         .arg(Arg::new("split").long("split").value_name("json-file"))
         .arg(Arg::new("target").required(true))        
         .get_matches();
     // Extract arguments
-    let outdir : Option<&String> = matches.get_one("outdir");
+    let target = matches.get_one::<String>("target").unwrap();   
+    // Configure settings
+    let settings = Config{
+	outdir: matches.get_one("outdir").map(|s: &String| s.clone()),
+	devmdir: matches.get_one::<String>("devmdir").unwrap().clone(),
+	prefix: default_prefix(target),
+	checks: overflow_checks, // for now
+	blocksize: *matches.get_one("blocksize").unwrap(),
+	debug: matches.is_present("debug"),
+	minimise_requires: matches.is_present("minimise")||matches.is_present("minimise-all"),
+	minimise_internal: matches.is_present("minimise-all"),
+    };
     let overflows = matches.is_present("overflow");
-    let minimise = matches.is_present("minimise");    
-    let blocksize : &usize = matches.get_one("blocksize").unwrap();
-    let target = matches.get_one::<String>("target").unwrap();
-    let devmdir = matches.get_one::<String>("devmdir").unwrap();
     // Read from asm file
     let hex = fs::read_to_string(target)?;
     let bytes = hex.trim().from_hex_string()?;    
     // Setup configuration
-    let mut roots = HashMap::new();
-    let prefix = default_prefix(target);
+    let mut roots = HashMap::new();    
     // Configure roots
     roots.insert((0,0),"main".to_string());
     // Check if a config is provided
@@ -71,7 +79,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Infer havoc instructions
     contract = infer_havoc_insns(contract);
     // Deconstruct into sequences
-    let mut cfgs = deconstruct(&contract,*blocksize,minimise);
+    let mut cfgs = deconstruct(&contract,&settings);
     // Configure roots
     for (c,r) in roots.keys() {
         cfgs[*c].add_root(*r);
@@ -79,10 +87,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Group subsequences
     let groups = group(roots,&cfgs);
     // Set output directory
-    configure_outdir(outdir);    
-    write_headers(&devmdir,&prefix,&contract);
+    configure_outdir(&settings.outdir);    
+    write_headers(&contract,&settings);
     // Write files
-    write_groups(&devmdir,&prefix,groups);
+    write_groups(groups,&settings);
     // Done
     Ok(())
 }
@@ -92,7 +100,7 @@ fn default_prefix(name: &str) -> String {
     filename.replace(".","_")
 }
 
-fn configure_outdir(outdir: Option<&String>) {
+fn configure_outdir(outdir: &Option<String>) {
     // Create output directory
     match outdir {
         None => {}
@@ -101,6 +109,32 @@ fn configure_outdir(outdir: Option<&String>) {
             env::set_current_dir(d);            
         }
     };
+}
+
+#[derive(Clone,Debug)]
+struct Config {
+    /// Prefix to use when generating files.
+    prefix: String,
+    /// Determines where generated files should be placed.
+    outdir: Option<String>,
+    /// Identifies the path to the `evm-dafny` repository, so that can
+    /// be included directly.
+    devmdir: String,
+    /// Determines what checks should be applied to the disassembled bytecode.
+    checks: PreconditionFn,
+    /// Determines a limit on how many bytecodes to include in each
+    /// distinct block.
+    blocksize: usize,
+    /// Signals whether or not to generate debug information around
+    /// minimisation.
+    debug: bool,
+    /// Signals whether or not to use mimimisation on `requires`
+    /// clauses.
+    minimise_requires: bool,
+    /// Signals whether or not to minimise the internal stack/memory
+    /// information reported as comments.
+    minimise_internal: bool,
+    
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,14 +166,14 @@ type DomSet = SortedVec<usize>;
 
 // Given an assembly, deconstruct it into a set of blocks of a given
 // maximum size.
-fn deconstruct(contract: &Assembly, blocksize: usize, minimise: bool) -> Vec<ControlFlowGraph> {
+fn deconstruct<'a>(contract: &'a Assembly, settings: &'a Config) -> Vec<ControlFlowGraph<'a>> {
+    let blocksize = settings.blocksize;
     let mut cfgs = Vec::new();
     //
     for (i,s) in contract.iter().enumerate() {
         match s {
             StructuredSection::Code(insns) => {
-                let mut cfg = ControlFlowGraph::new(i,blocksize,insns.as_ref(), overflow_checks);
-                if minimise { cfg.minimise(); }
+                let mut cfg = ControlFlowGraph::new(i,blocksize,insns.as_ref(), settings.checks);
                 cfgs.push(cfg);
             }
             StructuredSection::Data(bytes) => {
@@ -247,7 +281,10 @@ fn touches_any(cfg: &ControlFlowGraph, from: &[Block], to: &[Block]) -> bool {
 
 /// Convert each block group into a sequence of one or more files
 /// using a given prefix.
-fn write_groups(devmdir: &str, prefix: &str, groups: Vec<BlockGroup>) -> Result<(), Box<dyn Error>> {
+fn write_groups(groups: Vec<BlockGroup>, settings: &Config) -> Result<(), Box<dyn Error>> {
+    let devmdir = &settings.devmdir;
+    let prefix = &settings.prefix;
+    //
     for i in 0..groups.len() {
         let g = &groups[i];
         let filename = format!("{prefix}_{}_{}.dfy",g.id,g.name);
@@ -274,7 +311,7 @@ fn write_groups(devmdir: &str, prefix: &str, groups: Vec<BlockGroup>) -> Result<
         // Write out imports for dependencies
         writeln!(f,"");                
         // Construct block printer
-        let mut printer = BlockPrinter::new(g.id,&mut f);
+        let mut printer = BlockPrinter::new(g.id,&mut f,settings);
         //
         for blk in &g.blocks { printer.print_block(&blk); }
         writeln!(f,"}}");
@@ -283,7 +320,10 @@ fn write_groups(devmdir: &str, prefix: &str, groups: Vec<BlockGroup>) -> Result<
 }
  
 /// Write out header files for all bytecode sections.
-fn write_headers(devmdir: &str, prefix: &str, contract: &Assembly) -> Result<(), Box<dyn Error>> {
+fn write_headers(contract: &Assembly, settings: &Config) -> Result<(), Box<dyn Error>> {
+    let devmdir = &settings.devmdir;    
+    let prefix = &settings.prefix;
+    //
     for (i,s) in contract.iter().enumerate() {
         match s {
             StructuredSection::Code(insns) => {
