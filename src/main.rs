@@ -343,6 +343,12 @@ fn write_headers(contract: &Assembly, settings: &Config) -> Result<(), Box<dyn E
                 write_bytecode(&mut f, insns, i);
                 // for now
                 write_external_call(&mut f);
+		// Write custom masking implementations
+		write_and_mask(&mut f, 1);
+		write_and_mask(&mut f, 5);
+		write_and_mask(&mut f, 8);
+		write_and_mask(&mut f, 32);		
+		write_and_mask(&mut f, 160);
                 writeln!(f,"}}")?;
             }
             StructuredSection::Data(bytes) => {
@@ -377,6 +383,17 @@ fn write_external_call<T:Write>(mut f: T) {
     writeln!(f,"\t}}");
 }
 
+fn write_and_mask<T:Write>(mut f: T, width: usize) {    
+    writeln!(f,"/**");
+    writeln!(f," * Alternative to Bytecode.And for masking u256 into a u{width}");
+    writeln!(f," */");
+    writeln!(f,"function AndU{width}(st: EvmState.ExecutingState): (st': EvmState.State)");
+    writeln!(f,"requires st.Operands() >= 2 && st.Peek(0) == (Int.MAX_U{width} as u256) {{");
+    writeln!(f,"    var rhs := st.Peek(1);");
+    writeln!(f,"    var res := rhs % (Int.TWO_{width} as u256);");
+    writeln!(f,"    st.Pop(2).Push(res).Next()");
+    writeln!(f,"}}");    
+}
 
 // ===================================================================
 // Helpers
