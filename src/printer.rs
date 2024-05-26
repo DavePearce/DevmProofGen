@@ -332,7 +332,7 @@ impl<'a,T:Write> BlockPrinter<'a,T> {
 
     fn print_jump_assumes(&mut self, targets: &[usize]) {
         for target in targets {
-            writeln!(self.out,"\t\tassume st.IsJumpDest({target:#x});");
+            writeln!(self.out,"\t\tassume {{:axiom}} st.IsJumpDest({target:#x});");
         }
     }
 
