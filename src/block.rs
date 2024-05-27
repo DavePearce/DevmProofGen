@@ -9,6 +9,7 @@ use crate::opcodes::OPCODES;
 pub enum Bytecode {
     Comment(String),
     Assert(Vec<usize>,String),
+    Mask(usize),
     Unit(Instruction),
     JumpI(Vec<usize>),
     Jump(Vec<usize>)
@@ -291,6 +292,14 @@ fn insns_to_block(mut n: usize, mut pc: usize, index: usize, insns: &[Instructio
 
 fn translate_insn(insn: &Instruction, mut done: bool, states: &[AbstractState]) -> (Bytecode,bool) {
     let bc = match insn {
+        AND => {
+            match &operand(0,states) {
+                Some(b) if as_bit_mask(b) != 0 => {
+                    Bytecode::Mask(as_bit_mask(b))
+                }
+                _ => Bytecode::Unit(insn.clone())                    
+            }
+        }
         CALLCODE => todo!(),
         DELEGATECALL => todo!(),        
         HAVOC(n) => {
@@ -341,6 +350,45 @@ fn jump_targets(states: &[AbstractState]) -> Vec<usize> {
     targets.sort_unstable();
     targets.dedup();
     targets
+}
+
+/// Extract a single value (where applicable) for a given item on the
+/// stack.
+fn operand(index: usize, states: &[AbstractState]) -> Option<w256> {
+    let state = AbstractState::join_states(states);
+    let stack = state.stack();
+    if stack.len() <= index {
+        None
+    } else {
+        stack[index]
+    }
+}
+
+
+const MASK_U1 : w256 = w256::from_limbs([0b1,0,0,0]);
+const MASK_U5 : w256  = w256::from_limbs([0b11111,0,0,0]);
+const MASK_U8 : w256 = w256::from_limbs([0b11111111,0,0,0]);
+const MASK_U16 : w256 = w256::from_limbs([0b11111111_11111111,0,0,0]);
+const MASK_U24 : w256 = w256::from_limbs([0b11111111_11111111_11111111,0,0,0]);
+const MASK_U32 : w256 = w256::from_limbs([0b11111111_11111111_11111111_11111111,0,0,0]);
+const MASK_U64 : w256 = w256::from_limbs([0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,0,0,0]);
+const MASK_U128 : w256 = w256::from_limbs([0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,0,0]);
+const MASK_U160 : w256 = w256::from_limbs([0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,0b11111111_11111111_11111111_11111111,0]);
+
+/// Attempt to convert a given constant as a mask for a given
+/// bitwidth.
+fn as_bit_mask(w: &w256) -> usize {
+    match *w {
+	MASK_U1 => 1,
+	MASK_U5 => 5,
+	MASK_U8 => 8,
+	MASK_U16 => 16,
+	MASK_U32 => 32,
+	MASK_U64 => 64,
+	MASK_U128 => 128,	
+	MASK_U160 => 160,		
+	_ => 0
+    }
 }
 
 // =============================================================================
@@ -465,6 +513,15 @@ fn transfer_bytecode(bytecode: &Bytecode, mut state: NecessaryState, blocks: &[B
 	    state.set(n,tmp);
 	    state
 	}
+	Bytecode::Mask(mask) => {
+            // Special AND representation
+	    let mut used = state.pop();
+	    // Put things on the stack
+	    state.push(used);
+            state.push(true); // mask always "used"            
+            // Done
+            state
+        }
 	Bytecode::Unit(insn) => {
 	    let n = insn.operands();
 	    let m = insn_produces(insn);
