@@ -29,6 +29,15 @@ impl AbstractState {
         let stack_frame = Self::extract_stack_frame(state);
         Self{freemem_ptr,stack_frame}
     }
+    pub fn join_states(states: &[Self]) -> Self {
+        let mut r = states[0].clone();
+        //
+        for i in 1..states.len() {
+            r.join(&states[i]);
+        }
+        //
+        r
+    }
     pub fn freemem_ptr(&self) -> Option<usize> {
         self.freemem_ptr
     }

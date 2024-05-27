@@ -247,16 +247,9 @@ impl<'a,T:Write> BlockPrinter<'a,T> {
             Bytecode::JumpI(targets) => {
                 self.print_jumpi(targets);
             }
-	    Bytecode::Unit(AND) if self.settings.masks => {
-		let st = state.join_states();
-		// Get top stack item
-		let mask = match st.stack()[0] {
-		    Some(c) => as_bit_mask(&c),
-		    _ => 0
-		};
-		//
+	    Bytecode::Mask(mask) => {
 		let name = &OPCODES[AND.opcode() as usize];
-		if mask == 0 {
+		if *mask == 0 || !self.settings.masks {
 		    writeln!(self.out,"\t\tst := {name}(st);");                
 		} else {
 		    writeln!(self.out,"\t\tst := AndU{mask}(st);");                		    
@@ -382,30 +375,4 @@ fn has_value(st: &AbstractState) -> bool {
         }
     }
     count > 0
-}
-
-pub const MASK_U1 : w256 = w256::from_limbs([0b1,0,0,0]);
-pub const MASK_U5 : w256  = w256::from_limbs([0b11111,0,0,0]);
-pub const MASK_U8 : w256 = w256::from_limbs([0b11111111,0,0,0]);
-pub const MASK_U16 : w256 = w256::from_limbs([0b11111111_11111111,0,0,0]);
-pub const MASK_U24 : w256 = w256::from_limbs([0b11111111_11111111_11111111,0,0,0]);
-pub const MASK_U32 : w256 = w256::from_limbs([0b11111111_11111111_11111111_11111111,0,0,0]);
-pub const MASK_U64 : w256 = w256::from_limbs([0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,0,0,0]);
-pub const MASK_U128 : w256 = w256::from_limbs([0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,0,0]);
-pub const MASK_U160 : w256 = w256::from_limbs([0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111,0b11111111_11111111_11111111_11111111,0]);
-
-/// Attempt to convert a given constant as a mask for a given
-/// bitwidth.
-fn as_bit_mask(w: &w256) -> usize {
-    match *w {
-	MASK_U1 => 1,
-	MASK_U5 => 5,
-	MASK_U8 => 8,
-	MASK_U16 => 16,
-	MASK_U32 => 32,
-	MASK_U64 => 64,
-	MASK_U128 => 128,	
-	MASK_U160 => 160,		
-	_ => 0
-    }
 }
