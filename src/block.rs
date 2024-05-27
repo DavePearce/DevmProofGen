@@ -513,6 +513,12 @@ fn transfer_bytecode(bytecode: &Bytecode, mut state: NecessaryState, blocks: &[B
 	    state.set(n,tmp);
 	    state
 	}
+	Bytecode::Unit(MSTORE|MSTORE8) => {
+	    // Put things on the stack
+	    state.push(false); // value lost
+            state.push(true); // address always "used"
+	    state
+	}        
 	Bytecode::Mask(mask) => {
             // Special AND representation
 	    let mut used = state.pop();
