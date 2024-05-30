@@ -371,17 +371,29 @@ fn write_headers(contract: &Assembly, settings: &Config) -> Result<(), Box<dyn E
 fn write_bytecode<T:Write>(mut f: T, insns: &[Instruction], id: usize) {
     // Convert instructions into bytes
     let mut bytes = insns.assemble();   
-    //
-    write!(f,"\tconst BYTECODE_{id} : seq<u8> := [");
-    //
+
+    let chunksize = 160;
+    write!(f,"\tconst BYTECODE_{id}_0 : seq<u8> := [");
     for i in 0..bytes.len() {
-        if i%8 == 0 { write!(f,"\n\t\t"); }
+        if i%8 == 0 {
+            write!(f,"\n\t\t");
+        }
+
+        if i>0 && i%chunksize == 0 {
+            let chunknumber = i/chunksize;
+            let chunknumber_prev = chunknumber - 1;
+            write!(f,"]\n\tconst BYTECODE_{id}_{chunknumber} : seq<u8> := BYTECODE_{id}_{chunknumber_prev} + [\n\t\t");
+        }
         write!(f,"{:#02x}", bytes[i]);
-        if (i + 1) != bytes.len() {
+        if ((i + 1) != bytes.len()) && ((i + 1)%chunksize != 0) {
             write!(f,", ");
         }
     }
+
     writeln!(f,"\n\t]");
+    let chunknumber = bytes.len()/chunksize;
+    write!(f,"\tconst BYTECODE_{id} : seq<u8> := BYTECODE_{id}_{chunknumber}\n");
+
 }
 
 fn write_external_call<T:Write>(mut f: T) {
