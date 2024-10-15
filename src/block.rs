@@ -300,8 +300,6 @@ fn translate_insn(insn: &Instruction, mut done: bool, states: &[AbstractState]) 
                 _ => Bytecode::Unit(insn.clone())                    
             }
         }
-        CALLCODE => todo!(),
-        DELEGATECALL => todo!(),        
         HAVOC(n) => {
             // Virtual instructions
             Bytecode::Comment(format!("Havoc {n}"))
@@ -321,8 +319,6 @@ fn translate_insn(insn: &Instruction, mut done: bool, states: &[AbstractState]) 
             Bytecode::Jump(targets)                    
         }
         RJUMPI(_)|RJUMP(_) => { todo!() }
-        STATICCALL => todo!(),        
-        //SWAP(_) =>  Bytecode::Unit(insn.clone()),
         DATA(bytes) => {
             done = true;
             Bytecode::Unit(insn.clone())            
@@ -465,7 +461,8 @@ fn determine_necessary_stateinfo(blocks: &mut [Block]) {
     }
     // Iterative dataflow analysis algorithm :)
     let mut changed = true;
-    while changed {
+    let mut counter = 100;
+    while changed && counter > 0 {
         changed = false;        
         // Iterate backwards
         for i in (0..n).into_iter().rev() {
@@ -486,6 +483,7 @@ fn determine_necessary_stateinfo(blocks: &mut [Block]) {
                 changed |= blocks[i].states[j].necessary.join(&state);                
             }
         }
+	counter -= 1;
     }
 }
 
