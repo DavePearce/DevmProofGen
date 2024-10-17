@@ -586,8 +586,8 @@ fn insn_produces(insn: &Instruction) -> usize {
         BLOCKHASH => 1,
         COINBASE|TIMESTAMP|NUMBER|DIFFICULTY|GASLIMIT|CHAINID|SELFBALANCE => 1,
         // 50s: Stack, Memory, Storage and Flow Operations
-        MSIZE|PC|GAS|MLOAD|SLOAD => 1,
-	JUMPDEST|POP|JUMP|JUMPI|SSTORE|MSTORE|MSTORE8 => 0,     
+        MSIZE|PC|GAS|MLOAD|SLOAD|TLOAD => 1,
+	JUMPDEST|POP|JUMP|JUMPI|SSTORE|MSTORE|MSTORE8|TSTORE => 0,     
         // 60s & 70s: Push Operations            
         PUSH0|PUSH(_) => 1,
         // 80s: Duplication Operations

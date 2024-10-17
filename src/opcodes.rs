@@ -91,8 +91,8 @@ pub static OPCODES: &'static [&'static str] = &[
     "MSize",          //            0x59
     "Gas",            //              0x5a
     "JumpDest",       //         0x5b
-    "RJump",          //                 0x5c
-    "RJumpI",         //                 0x5d
+    "TLoad",          //                 0x5c
+    "TStore",         //                 0x5d
     "",               //                 0x5e
     "Push0",          //                 0x5f
     "Push1",          //            0x60
