@@ -91,8 +91,8 @@ pub struct BlockSequence {
 
 impl BlockSequence {
     /// Construct a block sequence from a given instruction sequence.
-    pub fn from_insns(n: usize, insns: &[Instruction], precheck: PreconditionFn) -> Self {
-        let mut blocks = insns_to_blocks(n, insns, precheck);
+    pub fn from_insns(n: usize, insns: &[Instruction], precheck: PreconditionFn, limit: usize) -> Self {
+        let mut blocks = insns_to_blocks(n, insns, precheck, limit);
         determine_necessary_stateinfo(&mut blocks);
         Self{blocks}
     }
@@ -217,9 +217,9 @@ pub type PreconditionFn = fn(&Instruction,&mut Vec<Bytecode>);
 /// This employs an abstract interpretation to determine various key
 /// pieces of information (e.g. jump targets, stack values, etc) at
 /// each point.
-fn insns_to_blocks(n: usize, insns: &[Instruction], precheck: PreconditionFn) -> Vec<Block> {
+fn insns_to_blocks(n: usize, insns: &[Instruction], precheck: PreconditionFn, limit: usize) -> Vec<Block> {
     // Compute suplementary information needed for remainder.
-    let analysis = BytecodeAnalysis::from_insns(insns);
+    let analysis = BytecodeAnalysis::from_insns(insns, limit).unwrap();
     // Initially empty set of blocks.
     let mut blocks = Vec::new();
     // Index of current instruction.

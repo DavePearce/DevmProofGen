@@ -39,7 +39,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .arg(Arg::new("minimise-all").long("minimise-all"))
 	.arg(Arg::new("masks").long("masks"))
         .arg(Arg::new("split").long("split").value_name("json-file"))
-        .arg(Arg::new("target").required(true))        
+        .arg(Arg::new("target").required(true))
+        .arg(Arg::new("limit")
+             .long("limit")
+             .value_name("LIMIT")
+             .value_parser(clap::value_parser!(usize))
+             .default_value("4294967296"))	
         .get_matches();
     // Extract arguments
     let target = matches.get_one::<String>("target").unwrap();   
@@ -50,6 +55,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 	prefix: default_prefix(target),
 	checks: overflow_checks, // for now
 	blocksize: *matches.get_one("blocksize").unwrap(),
+	limit: *matches.get_one("limit").unwrap(),
 	debug: matches.is_present("debug"),
 	masks: matches.is_present("masks"),
 	minimise_requires: matches.is_present("minimise")||matches.is_present("minimise-all"),
@@ -79,7 +85,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Disassemble bytes into instructions    
     let mut contract = Assembly::from_legacy_bytes(&bytes);    
     // Infer havoc instructions
-    contract = infer_havoc_insns(contract);
+    contract = infer_havoc_insns(contract,settings.limit);
     // Deconstruct into sequences
     let mut cfgs = deconstruct(&contract,&settings);
     // Configure roots
@@ -127,6 +133,8 @@ struct Config {
     /// Determines a limit on how many bytecodes to include in each
     /// distinct block.
     blocksize: usize,
+    /// Limits used to prevent non-termination.
+    limit: usize,
     /// Signals whether or not to generate debug information around
     /// minimisation.
     debug: bool,
@@ -177,7 +185,7 @@ fn deconstruct<'a>(contract: &'a Assembly, settings: &'a Config) -> Vec<ControlF
     for (i,s) in contract.iter().enumerate() {
         match s {
             StructuredSection::Code(insns) => {
-                let mut cfg = ControlFlowGraph::new(i,blocksize,insns.as_ref(), settings.checks);
+                let mut cfg = ControlFlowGraph::new(i,blocksize,insns.as_ref(), settings.checks, settings.limit);
                 cfgs.push(cfg);
             }
             StructuredSection::Data(bytes) => {
@@ -419,12 +427,18 @@ fn write_and_mask<T:Write>(mut f: T, width: usize) {
 // Helpers
 // ===================================================================
 
-fn infer_havoc_insns(mut asm: Assembly) -> Assembly {
+fn infer_havoc_insns(mut asm: Assembly, limit: usize) -> Assembly {
     // This could probably be more efficient :)
     let sections = asm.iter_mut().map(|section| {
         match section {
-            StructuredSection::Code(ref mut insns) => {    
-                let ninsns = insert_havocs(insns.clone());
+            StructuredSection::Code(ref mut insns) => {
+                let ninsns = match insert_havocs(insns.clone(), limit) {
+		    Ok(ninsns) => ninsns,
+		    Err(ninsns) => {
+			println!("WARNING: havoc inference incomplete");
+			ninsns
+		    }
+		};
 	        StructuredSection::Code(ninsns)
             }
             _ => section.clone()

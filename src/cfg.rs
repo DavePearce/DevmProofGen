@@ -1,4 +1,4 @@
-use evmil::bytecode::{Assemble, Assembly, Instruction, StructuredSection};
+use evmil::bytecode::{Assemble, Assembly,BlockVec, Instruction, StructuredSection};
 use evmil::analysis::{BlockGraph};
 use evmil::util::{dominators,SortedVec,transitive_closure};
 use crate::block::{Block,BlockSequence,PreconditionFn};
@@ -28,15 +28,21 @@ pub struct ControlFlowGraph<'a> {
 }
 
 impl<'a> ControlFlowGraph<'a> {
-    pub fn new(cid: usize, blocksize: usize, insns: &'a [Instruction], precheck: PreconditionFn) -> Self {
+    pub fn new(cid: usize, blocksize: usize, insns: &'a [Instruction], precheck: PreconditionFn, limit: usize) -> Self {
         // Construct graph
-        let graph = BlockGraph::from(insns);
+        let graph = match BlockGraph::from_blocks(BlockVec::new(insns),limit) {
+	    Ok(graph) => graph,
+	    Err(graph) => {
+		println!("WARNING: control-flow graph construction was incomplete");
+		graph
+	    }
+	};
         // Compute dominators
         let dominators = dominators(&graph);
         // Compute transitive closure
         let reaches = transitive_closure(&graph);
         // Determine block decomposition based on the given block size.
-        let blocks = BlockSequence::from_insns(blocksize,insns,precheck);        
+        let blocks = BlockSequence::from_insns(blocksize,insns,precheck,limit);        
         // Done
         Self{cid,graph,dominators,reaches,blocks, roots: Vec::new()}
     }

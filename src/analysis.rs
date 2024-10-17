@@ -169,12 +169,13 @@ pub struct BytecodeAnalysis {
 impl BytecodeAnalysis {
     /// Perform the bytecode analysis on a given sequence of
     /// instructions.
-    pub fn from_insns(insns: &[Instruction]) -> Self {
+    pub fn from_insns(insns: &[Instruction], limit: usize) -> Result<Self,()> {
         let mut states = Vec::new();        
         // Compute analysis results
         let init : State = State::new();
         // Run the abstract trace
-        let trace : Vec<Vec<State>> = trace(&insns,init);
+	let mut err = false;
+        let trace : Vec<Vec<State>> = trace(&insns,init,limit).map_err(|_| ())?;
         // Convert into abstract states
         for t in trace {
             let mut s:Vec<_> = t.iter().map(|s| AbstractState::new(s)).collect();
@@ -182,7 +183,7 @@ impl BytecodeAnalysis {
             states.push(s);
         }
         //
-        Self{states}        
+        Ok(Self{states})
     }
 
     /// Get the set of abstract states at a given instruction within
